@@ -5,7 +5,7 @@ import com.uospd.switches.Commutator;
 import java.util.ArrayList;
 import java.util.List;
 
-public interface VlanShowing extends CommutatorStrategy{
+public interface VlanShowingStrategy extends CommutatorStrategy{
 
   String showVlans(int port, Commutator commutator);
 

@@ -9,7 +9,8 @@ import java.lang.annotation.Target;
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Callback{
-    String value();
+    String value() default "";
     int timeout() default 0;
     boolean globalTimeout() default false;
+    boolean commutatorCallback() default false;
 }

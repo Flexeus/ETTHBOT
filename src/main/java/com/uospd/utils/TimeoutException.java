@@ -1,14 +1,14 @@
 package com.uospd.utils;
 
 public class TimeoutException extends Exception{
-    int remainingSeconds;
+    long remainingSeconds;
 
-    public TimeoutException(int remainingSeconds){
+    public TimeoutException(long remainingSeconds){
         super();
         this.remainingSeconds = remainingSeconds;
     }
 
-    public int getRemainingSeconds(){
+    public long getRemainingSeconds(){
         return remainingSeconds;
     }
 }

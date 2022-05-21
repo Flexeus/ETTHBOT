@@ -5,6 +5,7 @@ import com.uospd.switches.exceptions.ConnectException;
 import com.uospd.switches.exceptions.InvalidDatabaseOIDException;
 import com.uospd.switches.exceptions.NoSnmpAnswerException;
 import com.uospd.switches.exceptions.UnsupportedCommutatorException;
+import com.uospd.switches.interfaces.CommunityCreateStrategy;
 import com.uospd.switches.interfaces.CommutatorStrategy;
 import com.uospd.utils.Network;
 import lombok.RequiredArgsConstructor;
@@ -14,11 +15,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
+import java.io.IOException;
 import java.util.*;
 
 @Component
 @RequiredArgsConstructor
 public class CommutatorConnector{
+    @Autowired
     private final LoggingService logger;
 
     @Value("${telnet.login}")
@@ -28,7 +31,8 @@ public class CommutatorConnector{
 
     private final Map<String, Commutator> connectionPool = new TreeMap<>();
     private final Map<String, Integer> connectedToSwitch = new HashMap<>();
-    private final Queue<Commutator> commutatorQueue = new LinkedList<>();
+
+    //private List<String> communityAdded = new ArrayList<>();
 
     @Autowired @Qualifier("strategyMapBean")
     private final Map<String,CommutatorStrategy> strategyMap;
@@ -38,31 +42,75 @@ public class CommutatorConnector{
         addStrategy("1.3.6.1.4.1.8886.6.140",null);
     }
 
-    public Commutator getFeaturedCommutator(Commutator commutator, String snmpCommunity) throws ConnectException, UnsupportedCommutatorException, InvalidDatabaseOIDException{
+    public Commutator getFeaturedCommutator(Commutator commutator, String snmpCommunity) throws ConnectException, UnsupportedCommutatorException, InvalidDatabaseOIDException, NoSnmpAnswerException{
         String ip = commutator.getIp();
-        boolean ping = Network.ping(ip, 300);
-        if(!ping) throw new ConnectException("No Ping to commutator");
+        logger.connectionsLog(ip+": connecting");
+        if(!Network.ping(ip, 300)){
+           // ??? if(existInPool(ip)) disconnect(connectionPool.get(ip));
+            logger.connectionsLog(ip+": нет пинга");
+            throw new ConnectException("No Ping to commutator");
+        }
         if(connectionPool.containsKey(ip)){
-            logger.debug(ip + " уже есть в пуле, отдаем его пользователю");
+            logger.connectionsLog(ip + " уже есть в пуле, отдаем его пользователю");
             connectedToSwitch.put(ip, connectedToSwitch.get(ip) + 1);
             return connectionPool.get(ip);
         }
-        commutator.enableSnmp(snmpCommunity);
-        try{
-            String objectoid = commutator.getResponse(".1.3.6.1.2.1.1.2.0");
-            if(objectoid.equals("Null")) throw new ConnectException("No Object ID for " + ip);
-            else if(!objectoid.equals(commutator.modelInfo().getOID())){
-                throw new InvalidDatabaseOIDException("Wrong OID in database for:"+ip);
-            }
-            if(strategyMap.containsKey(objectoid)) commutator.setStrategy(strategyMap.get(objectoid));
-            else throw new UnsupportedCommutatorException("Strategy for commutator not found");
-        }catch(NoSnmpAnswerException | NullPointerException e){
-            throw new ConnectException("No Object ID for " + ip, e);
+
+        String bdOid = commutator.model().getOID();
+        if(!strategyMap.containsKey(bdOid)){
+            logger.connectionsLog(ip+": Strategy for "+bdOid+" not found");
+            throw new UnsupportedCommutatorException("Strategy for commutator not found");
         }
+        commutator.setStrategy(strategyMap.get(bdOid));
         commutator.setTelnetParams(telnetLogin,telnetPassword);
-        connectionPool.put(ip, commutator);
-        connectedToSwitch.put(ip, connectedToSwitch.getOrDefault(ip,0)+1);
-        return commutator;
+
+        //noinspection ConstantConditions
+        for(int i = 1;i<=2;i++){ // две попытки
+            logger.connectionsLog(ip+": попытка подключения №"+i);
+            try{
+                commutator.enableSnmp(snmpCommunity);
+                String objectoid = commutator.getResponse(".1.3.6.1.2.1.1.2.0");
+                if(objectoid.equals("Null")){
+                    commutator.disconnectSnmp();
+                    logger.connectionsLog(ip+": OBJECTOID IS NULL");
+                    throw new ConnectException("No Object ID for " + ip);
+                }else if(!objectoid.equals(bdOid)){ // если  objectoid не соответствует хранящемуся в БД
+                    commutator.disconnectSnmp();
+                    logger.connectionsLog(ip+": Wrong OID in database");
+                    throw new InvalidDatabaseOIDException("Wrong OID in database for:" + ip);
+                }
+            }catch(NoSnmpAnswerException e){
+                commutator.disconnectSnmp();
+                logger.connectionsLog(ip+": NoSnmpAnswerException");
+                throw new NoSnmpAnswerException("No Object ID for " + ip);
+            }catch(NullPointerException e){ // Если не прописано коммьюнити
+                commutator.disconnectSnmp();
+                if(i == 1){
+                    logger.connectionsLog(ip+": произошла ошибка при первом подключении");
+                    if(commutator.hasStrategy(CommunityCreateStrategy.class)){
+                        try{
+                            commutator.createCommunity(snmpCommunity);
+                        }catch(Exception ex){
+                            e.printStackTrace();
+                        }
+                        logger.connectionsLog(ip+": creating community");
+                        //communityAdded.add(ip);
+                        continue;
+                    }
+                    else{
+                        logger.connectionsLog(ip+": прописка коммьюнити недоступна");
+                    }
+                }
+                logger.connectionsLog(ip+": NullPointerException");
+                throw new ConnectException("NullPointerException " + ip, e);
+            }
+            connectionPool.put(ip, commutator);
+            connectedToSwitch.put(ip, connectedToSwitch.getOrDefault(ip, 0) + 1);
+            logger.connectionsLog(ip+": connected");
+            return commutator;
+        }
+        logger.connectionsLog(ip+": ConnectException");
+         throw new ConnectException("Не удалось подключиться");
     }
 
     public void addStrategy(String oid,CommutatorStrategy strategy){
@@ -87,7 +135,7 @@ public class CommutatorConnector{
             if(connected < 1){
                 connectedToSwitch.remove(ip);
                 connectionPool.remove(ip);
-                commutator.disconnect();
+                commutator.disconnectSnmp();
                 return;
             }
             connectedToSwitch.put(ip, connected);

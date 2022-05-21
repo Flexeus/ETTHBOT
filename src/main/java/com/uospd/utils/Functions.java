@@ -148,11 +148,6 @@ public final class Functions {
         return timeUnit.convert(diffInMillies,TimeUnit.MILLISECONDS);
     }
 
-    public static long getDateDiff(Date beforeDate, TimeUnit timeUnit){
-        if(beforeDate == null) throw new IllegalArgumentException("beforeDate cannot be null");
-        long diffInMillies = System.currentTimeMillis() - beforeDate.getTime();
-        return timeUnit.convert(diffInMillies,TimeUnit.MILLISECONDS);
-    }
 
     public static String getAsLink(String text,String url){
         return "<a href=\""+url+"\">"+text+"</a>";

@@ -2,6 +2,8 @@ package com.uospd.switches.interfaces;
 
 import com.uospd.switches.Commutator;
 
+import java.io.IOException;
+
 public interface DropCountersStrategy extends CommutatorStrategy{
-    String dropCounters(Commutator commutator,int port);
+    void dropCounters(Commutator commutator,int port) throws Exception;
 }

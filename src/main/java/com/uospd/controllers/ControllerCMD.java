@@ -8,8 +8,10 @@ import com.uospd.entityes.User;
 import com.uospd.services.AccidentService;
 import com.uospd.services.CommutatorService;
 import com.uospd.switches.Commutator;
+import com.uospd.utils.AntifloodService;
 import com.uospd.utils.KeyboardBuilder;
 import com.uospd.utils.Network;
+import com.uospd.utils.TimeoutException;
 import lombok.SneakyThrows;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.telegram.telegrambots.meta.api.objects.Message;
@@ -26,7 +28,7 @@ public class ControllerCMD{
     @Autowired private AccidentService accidentService;
     @Autowired private Bot bot;
     @Autowired private ExecutorService botExecutor;
-
+    @Autowired private AntifloodService antifloodService;
 
     @Command({"/help","/start"})
     public void helpCommand(User user){
@@ -34,7 +36,7 @@ public class ControllerCMD{
     }
 
     @Command(value = {"/auth"}, description = "/auth - проверка авторизации")
-    public void checkAuthorizationCMD(User user, String args[]){
+    public void checkAuthorizationCMD(User user, String args[]) throws TimeoutException{
         if(args.length == 1){
             bot.sendMsg(user,"Не указан логин");
             return;
@@ -43,17 +45,28 @@ public class ControllerCMD{
             bot.sendMsg(user,"Неверный формат команды.");
             return;
         }
-        String authorizationMessage = Network.getAuthorization(args[1]);
-        bot.sendMsg(user,authorizationMessage);
+        String login = args[1];
+        if (login.equals("cpdtest.nvkz")) {
+            bot.sendMsg(user, "Это служебный логин");
+            return;
+        }
+        antifloodService.action("auth:"+login,10);
+        botExecutor.submit(() -> {
+            String authorizationMessage = Network.getAuthorization(login+"@kem");
+            if(authorizationMessage.equals("Логин не авторизован")) authorizationMessage = Network.getAuthorization(login);
+            bot.sendMsg(user, authorizationMessage);
+        });
     }
 
-    @Command(value = {"/status","/статус"},description = "/status - показать статус всех портов на коммутаторе")
-    public void showPortsStatusCommand(User user){
+
+    @Command(value = {"/status","/статус","показать статус портов"},description = "/status - показать статус всех портов на коммутаторе")
+    public void showPortsStatusCommand(User user) throws TimeoutException{
         if (!user.isConnectedToSwitch()) {
             bot.sendMsg(user, "Вы не подключены к коммутатору\nДля подключения к коммутатору введите его ip или адрес в чат");
             return;
         }
         Commutator commutator = user.getSwitch();
+        antifloodService.action("commutator:"+commutator.getIp(),8);
         boolean ping = commutator.ping(300);
         if(!ping){
             bot.sendMsg(user,"Нет пинга. Вы были отключены от коммутатора.");
@@ -64,13 +77,13 @@ public class ControllerCMD{
         bot.sendMsg(user,commutator.getPortsStatus());
     }
 
-
     @Command(value = "/clink",description = "/clink - проверка на подъем/падение линка на всех портах")
-    public void clinkCommand(User user){
+    public void clinkCommand(User user) throws TimeoutException{
         if(!user.isConnectedToSwitch()){
             bot.sendMsg(user, "Вы не подключены к коммутатору");
             return;
         }
+        antifloodService.action("commutator:"+user.getSwitch().getIp(),15);
         botExecutor.submit(() -> {
             int[] before = user.getSwitch().getAllLinks();
             bot.sendMsg(user, "Таймер запущен на 8 секунд.");
@@ -122,8 +135,9 @@ public class ControllerCMD{
     public void avarii(User user){
         Message downMessage = bot.sendMsg(user, accidentService.getDownSwitches());
         Message upMessage = bot.sendMsg(user, accidentService.getUPSwitches());
-        InlineKeyboardMarkup keyboard = KeyboardBuilder.oneButtonKeyboard("Обновить", String.format("updateAvarii;%d;%d", downMessage.getMessageId(), upMessage.getMessageId()));
+        InlineKeyboardMarkup keyboard = KeyboardBuilder.oneButtonKeyboard("Обновить", String.format("updateAvarii;%d", downMessage.getMessageId()));
         bot.editKeyboard(user.getId(), upMessage.getMessageId(), keyboard);
     }
+
 
 }

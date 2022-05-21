@@ -28,10 +28,8 @@ public class DataConfig {
     private String PROP_HIBERNATE_DIALECT;
     @Value("${db.hibernate.show_sql}")
     private String PROP_HIBERNATE_SHOW_SQL;
-
     @Value("${db.entitymanager.packages.to.scan}")
     private String PROP_ENTITYMANAGER_PACKAGES_TO_SCAN;
-
     @Value("${db.hibernate.hbm2ddl.auto}")
     private String PROP_HIBERNATE_HBM2DDL_AUTO;
 

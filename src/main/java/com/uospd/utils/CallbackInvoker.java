@@ -1,26 +1,22 @@
 package com.uospd.utils;
 
-import com.uospd.annotations.Callback;
 import com.uospd.entityes.User;
-import lombok.AllArgsConstructor;
-import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.util.Pair;
 import org.springframework.stereotype.Component;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.Arrays;
-import java.util.Date;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 @Component
 public class CallbackInvoker{
-    private Map<CallbackInvocationMD,Date> callbackTimeoutCache = new HashMap<>();
 
     @Autowired @Qualifier("callbackControllers") @Getter @Setter
     private Map<String, Pair<Object,Method>> callbackMap;
@@ -29,36 +25,35 @@ public class CallbackInvoker{
         return callbackMap.containsKey(callback);
     }
 
-    public String executeCallback(String callback,User user) throws TimeoutException{
+    public void executeCallback(String callback, CallbackQuery query, User user) throws TimeoutException{
         String[] args = callback.split(";");
         String callbackName = args[0];
         if(!isCallbackAvailable(callbackName)) throw new RuntimeException("Unexpected callback");
         Pair<Object, Method> objectMethodPair = callbackMap.get(callbackName);
         Object controllerObject = objectMethodPair.getFirst();
         Method callbackMethod = objectMethodPair.getSecond();
-        Callback annotation = callbackMethod.getAnnotation(Callback.class);
-        int callbackTimeout = annotation.timeout();
-        CallbackInvocationMD callbackInvocationMD = new CallbackInvocationMD(annotation.globalTimeout() ? null : user, callback);
-        if(callbackTimeout > 0 && callbackTimeoutCache.containsKey(callbackInvocationMD)){
-            Date lastDate = callbackTimeoutCache.get(callbackInvocationMD);
-            int delay = (int) (callbackTimeout-Functions.getDateDiff(lastDate, TimeUnit.SECONDS));
-            if(delay>0 && !user.isAdmin()) throw new TimeoutException(delay);
-
-        }
-        String[] callbackArgs = Arrays.copyOfRange(args, 1, args.length);
+        String[] leftCallbackArgs = Arrays.copyOfRange(args, 1, args.length);
         try{
-            callbackMethod.invoke(controllerObject,user, callbackArgs);
-            callbackTimeoutCache.put(callbackInvocationMD,new Date());
+            Object[] objects = buildMethodInvokeArgs(user, leftCallbackArgs, query, callbackMethod);
+            callbackMethod.invoke(controllerObject, objects);
+        }
+        catch (InvocationTargetException e) {
+            if (e.getCause() instanceof TimeoutException timeoutException) throw timeoutException;
         }catch(Exception e){
             e.printStackTrace();
         }
-        return null;
     }
 
-    @AllArgsConstructor
-    @EqualsAndHashCode
-    private static class CallbackInvocationMD{
-        @Getter private final User user;
-        @Getter private final String callback;
+    private Object[] buildMethodInvokeArgs(User user, String[] leftCallbackArgs,CallbackQuery query, Method method){
+        Parameter[] parameters = method.getParameters();
+        Object[] methodArgs = new Object[parameters.length];
+        for(int i = 0;i < parameters.length;i++){
+            Class<?> type = parameters[i].getType();
+            if(type == User.class) methodArgs[i] = user;
+            else if(type == String[].class) methodArgs[i] = leftCallbackArgs;
+            else if(type == CallbackQuery.class) methodArgs[i] = query;
+            else methodArgs[i] = null;
+        }
+        return methodArgs;
     }
 }

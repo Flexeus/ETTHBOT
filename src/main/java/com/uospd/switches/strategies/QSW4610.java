@@ -3,10 +3,7 @@ package com.uospd.switches.strategies;
 import com.uospd.annotations.CommutatorStrategyComponent;
 import com.uospd.switches.Commutator;
 import com.uospd.switches.exceptions.NoSnmpAnswerException;
-import com.uospd.switches.interfaces.CableTestStrategy;
-import com.uospd.switches.interfaces.DDMStrategy;
-import com.uospd.switches.interfaces.DropCountersStrategy;
-import com.uospd.switches.interfaces.VlanShowing;
+import com.uospd.switches.interfaces.*;
 import lombok.SneakyThrows;
 
 import java.util.Collections;
@@ -14,11 +11,18 @@ import java.util.List;
 
 @CommutatorStrategyComponent({"1.3.6.1.4.1.27514.1.1.1.344", "1.3.6.1.4.1.27514.1.1.1.410",
                               "1.3.6.1.4.1.27514.1.1.1.310", "1.3.6.1.4.1.27514.1.1.1.355"})
-public class QSW4610  implements CableTestStrategy, DropCountersStrategy, VlanShowing, DDMStrategy {
+public class QSW4610  implements CableTestStrategy, DropCountersStrategy, VlanShowingStrategy, DDMStrategy, CommunityCreateStrategy{
     private Commutator commutator;
 
+    @Override public void writeCommunity(String community, Commutator commutator) throws Exception{
+        commutator.executeTelnetCommands("config","snmp-server community rw 0 "+community,"q","q");
+    }
 
-    public String snmpCableTest(int port,Commutator commutator){
+    @Override public void deleteCommunity(String community, Commutator commutator) throws Exception{
+        commutator.executeTelnetCommands("config","no snmp-server community 0 "+community,"q","q");
+    }
+
+    public String snmpCableTest(int port, Commutator commutator){
         commutator.snmpSet("1.3.6.1.4.1.27514.100.3.2.1.18."+port,1);
         try{
             Thread.sleep(400);
@@ -109,8 +113,9 @@ public class QSW4610  implements CableTestStrategy, DropCountersStrategy, VlanSh
         return false;
     }
 
-    public String dropCounters(Commutator commutator,int port){
-        return "clear counters interface ethernet 1/0/"+port;
+
+    public void dropCounters(Commutator commutator,int port) throws Exception{
+        commutator.executeTelnetCommands("clear counters interface ethernet 1/0/"+port,"exit");
     }
 
 }

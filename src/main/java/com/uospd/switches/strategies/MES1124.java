@@ -1,13 +1,10 @@
 package com.uospd.switches.strategies;
 
 
-
 import com.uospd.annotations.CommutatorStrategyComponent;
 import com.uospd.switches.Commutator;
-import com.uospd.switches.interfaces.CableTestStrategy;
-import com.uospd.switches.interfaces.DDMStrategy;
-import com.uospd.switches.interfaces.DropCountersStrategy;
-import com.uospd.switches.interfaces.VlanShowing;
+import com.uospd.switches.exceptions.NoSnmpAnswerException;
+import com.uospd.switches.interfaces.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,7 +16,15 @@ import java.util.List;
         "1.3.6.1.4.1.35265.1.39", // MES3116F
         "1.3.6.1.4.1.35265.1.74" // MES5324
 })
-public class MES1124 implements CableTestStrategy, DropCountersStrategy, VlanShowing, DDMStrategy {
+public class MES1124 implements CableTestStrategy, DropCountersStrategy, VlanShowingStrategy, DDMStrategy, CommunityCreateStrategy{
+
+    public void writeCommunity(String community, Commutator commutator) throws Exception{
+        commutator.executeTelnetCommands("config","snmp-server community "+community+" rw","exit");
+    }
+
+    public void deleteCommunity(String community, Commutator commutator) throws Exception{
+        commutator.executeTelnetCommands("config","no snmp-server community "+community,"exit");
+    }
 
     public String getDDMInfo(int port, Commutator commutator){
         String rxPower = null;
@@ -33,6 +38,15 @@ public class MES1124 implements CableTestStrategy, DropCountersStrategy, VlanSho
        // try{ Thread.sleep(1000);  }catch(InterruptedException e){ e.printStackTrace(); }
         if(txAnswer != null)  txPower = String.valueOf(Double.parseDouble(txAnswer)/1000);
         return ddmTemplate(temperature,rxPower,txPower);
+    }
+
+    private int getPortConnectionType(int port,Commutator commutator){
+        try{
+            return Integer.parseInt(commutator.getResponse("1.3.6.1.4.1.89.43.1.1.7."+port)); // regular(1), fiberOptics(2), comboRegular(3), comboFiberOptics(4)
+        }catch(NoSnmpAnswerException e){
+            e.printStackTrace();
+            return 0;
+        }
     }
 
     public String snmpCableTest(int port,Commutator commutator) throws NullPointerException {
@@ -59,10 +73,6 @@ public class MES1124 implements CableTestStrategy, DropCountersStrategy, VlanSho
                 "----------       --------------      --------------\n" +
                 "1              "+states[fpairstate]+"        "+fpairlength+"\n" +
                 "2              "+states[spairstate]+"        "+spairlength;
-    }
-
-    public String dropCounters(Commutator commutator,int port) {
-        return "clear counters " + getPortInterface(commutator.snmpPort(port), commutator);
     }
 
     public List<Integer> getVlansOnPort(int snmpPort,Commutator commutator){
@@ -103,4 +113,9 @@ public class MES1124 implements CableTestStrategy, DropCountersStrategy, VlanSho
     public String getPortInterface(int port,Commutator commutator) {
         return commutator.getResponse(".1.3.6.1.2.1.2.2.1.2."+'.'+port,"0");
     }
+
+    public void dropCounters(Commutator commutator,int port) throws Exception{
+        commutator.executeTelnetCommands("clear counters " + getPortInterface(commutator.snmpPort(port), commutator),"exit");
+    }
+
 }

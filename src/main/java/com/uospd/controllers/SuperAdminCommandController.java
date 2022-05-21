@@ -1,6 +1,7 @@
 package com.uospd.controllers;
 
 import com.uospd.Bot;
+import com.uospd.ErrorsMonitor;
 import com.uospd.UserNotFoundException;
 import com.uospd.annotations.Command;
 import com.uospd.annotations.SuperAdminController;
@@ -10,6 +11,7 @@ import com.uospd.services.LoggingService;
 import com.uospd.services.UserService;
 import com.uospd.utils.KeyboardBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -19,10 +21,13 @@ import java.util.List;
 
 @SuperAdminController
 public class SuperAdminCommandController{
+    @Autowired(required = false) @Qualifier("emon")
+    private ErrorsMonitor errorsMonitor;
     @Autowired private Bot bot;
     @Autowired private UserService userService;
     @Autowired private CommutatorService commutatorService;
     @Autowired private LoggingService logger;
+
 
     @Command(value = "/reg",description = "/reg - регистрация пользователя")
     public void registerCommand(User user){
@@ -31,9 +36,12 @@ public class SuperAdminCommandController{
             return;
         }
         KeyboardBuilder kb = new KeyboardBuilder(2);
-        userService.getRegistrationRequests().forEach( (id,name) -> {
-            kb.addButtonOnRow(name+" | "+id,"reg;"+id);
-            kb.addButtonOnRow("Отклонить","declinereg;"+id);
+        userService.getRegistrationRequests().forEach( (id,newuser) -> {
+            if(newuser.getPhoneNumber() != null){
+                kb.addButtonOnRow("✔" + newuser.getName() + " | " + id, "reg;" + id);
+                kb.nextRow();
+                kb.addButtonOnRow("[X]", "declinereg;" + id);
+            }
         });
         bot.sendMsg(user,"Выберите пользователя",kb.build());
     }
@@ -62,7 +70,7 @@ public class SuperAdminCommandController{
             bot.sendMsg(user, "Не указан айди жертвы");
             return;
         }
-        int banned = Integer.parseInt(args[1]);
+        long banned = Long.parseLong(args[1]);
         if(!userService.userExists(banned)){
             bot.sendMsg(user, "Пользователь не найден");
             return;
@@ -91,4 +99,25 @@ public class SuperAdminCommandController{
         System.exit(0);
     }
 
+    @Command(value = "/errormon")
+    public void closeCommand(User user,String args[]){
+        if(args.length == 1){
+            bot.sendMsg(user, "Не указан тип действия: changestate, ignore");
+            return;
+        }
+        String action = args[1];
+        switch(action){
+            case "changestate": errorsMonitor.changeState();
+            case "ignore":{
+                if(args.length == 2){
+                    bot.sendMsg(user, "Не указан ip коммутатора");
+                    return;
+                }
+                errorsMonitor.ignore(args[2]);
+            }
+            default: {
+                bot.sendMsg(user, "Неизвестная подкоманда.");
+            }
+        }
+    }
 }

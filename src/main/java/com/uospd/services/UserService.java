@@ -22,8 +22,8 @@ public class UserService {
     private final GroupRepository groupRepository;
     private final LoggingService logger;
 
-    private final SortedMap<Integer,User> users = new TreeMap<>();
-    private final Map<Integer,String> registrationRequests = new HashMap<>();
+    private final SortedMap<Long,User> users = new TreeMap<>();
+    private final Map<Long,User> registrationRequests = new HashMap<>();
     private final Set<User> admins = new HashSet<>();
 
     @PostConstruct
@@ -35,7 +35,7 @@ public class UserService {
     }
 
 
-    public Map<Integer, String> getRegistrationRequests(){
+    public Map<Long, User> getRegistrationRequests(){
         return registrationRequests;
     }
 
@@ -54,12 +54,12 @@ public class UserService {
         logger.writeUserLog(newUser,"зарегистрирован");
     }
 
-    public User getUser(int id) throws UserNotFoundException{
+    public User getUser(long id) throws UserNotFoundException{
         if(!users.containsKey(id)) throw new UserNotFoundException("User with id="+id+" not found");
         return users.get(id);
     }
 
-    public boolean userExists(Integer id){
+    public boolean userExists(Long id){
         return users.containsKey(id);
     }
 
@@ -68,17 +68,17 @@ public class UserService {
      @param name
      @return userid or -1 if user not found
      */
-    public int getIdByName(String name){
+    public long getIdByName(String name){
         return users.values().stream().filter(x -> x.getName().contains(" ") && x.getName().substring(x.getName().indexOf(" ") + 1)
                 .compareToIgnoreCase(name) == 0).map(User::getId)
-                .findFirst().orElse(-1);
+                .findFirst().orElse(-1L);
     }
 
     public List<User> getAllUsers(){
         return new ArrayList<>(users.values());
     }
 
-    public void forEachUser(BiConsumer<Integer,User> biConsumer){
+    public void forEachUser(BiConsumer<Long,User> biConsumer){
         users.forEach(biConsumer);
     }
 

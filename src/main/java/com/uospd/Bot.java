@@ -11,14 +11,15 @@ import com.uospd.switches.exceptions.NoSnmpAnswerException;
 import com.uospd.switches.exceptions.UnsupportedCommutatorException;
 import com.uospd.utils.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendContact;
 import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageReplyMarkup;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
@@ -34,7 +35,6 @@ import java.io.File;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static com.uospd.utils.Functions.*;
@@ -45,21 +45,15 @@ import static com.uospd.utils.Functions.*;
 public class Bot extends TelegramLongPollingBot {
     private static final int MAX_MESSAGE_LENGTH = 4096;
 
-    @Value("${bot.antiflood.seconds}") private int ANTIFLOOD_SECONDS;
-    @Value("${bot.antiflood.enabled}") private boolean ANTIFLOOD_ENABLED;
-
     private final String BOT_NAME;
-    //private final String BOT_TESTAPI_KEY;
     private final String BOT_API_KEY;
 
-    @Value("${rwcommunity}") private String rwCommunity;
-
-    @Autowired private ExecutorService es;
     @Autowired private CommutatorService commutatorService;
     @Autowired private UserService userService;
     @Autowired private LoggingService logger;
     @Autowired private CommandInvoker commandInvoker;
     @Autowired private CallbackInvoker callbackInvoker;
+    @Autowired private AntifloodService antifloodService;
 
     private final Map<Integer, ReplyKeyboard> keyboardStorage = new HashMap<>();
 
@@ -70,6 +64,7 @@ public class Bot extends TelegramLongPollingBot {
 
     @PostConstruct
     private void init(){
+        sendToSuperAdmin("Бот загружен");
         logger.log("Бот был загружен");
     }
 
@@ -78,124 +73,96 @@ public class Bot extends TelegramLongPollingBot {
         if(update.hasCallbackQuery()){
             logger.debug(update.getCallbackQuery().getData());
             String calldata = update.getCallbackQuery().getData();
-            int sender = update.getCallbackQuery().getFrom().getId();
-            if(!userService.userExists(sender)) return;
+            long sender = update.getCallbackQuery().getFrom().getId();
             User user;
             try{
                 user = userService.getUser(sender);
-            }catch(UserNotFoundException e){
-                logger.log(e.getMessage());
-                return;
-            }
+            }catch(UserNotFoundException e){return;}
             logger.debug(user);
-            if(user.isBanned()) return;
             String[] args = calldata.split(";");
-            if(callbackInvoker.isCallbackAvailable(args[0])){
-                try{
-                    String result = callbackInvoker.executeCallback(calldata, user);
-                    sendMsg(sender, result);
-                }catch(TimeoutException e){
-                    sendMsg(user, "Таймаут. Осталось секунд: "+e.getRemainingSeconds());
-                }
-            }else throw new IllegalStateException("Unexpected callback value: " + calldata);
+            if(!callbackInvoker.isCallbackAvailable(args[0])) throw new IllegalStateException("Unexpected callback value: " + calldata);
+            try{
+                CallbackQuery callbackQuery = update.getCallbackQuery();
+                callbackInvoker.executeCallback(calldata, callbackQuery, user);
+            }catch(TimeoutException e){
+                sendMsg(user, "Таймаут. Осталось секунд: " + e.getRemainingSeconds());
+            }
         }else if(update.hasMessage()){
-
-         //   RestrictChatMember restrictChatMember = new RestrictChatMember();
+            long dateDiff = getDateDiff(new Date(TimeUnit.SECONDS.toMillis(update.getMessage().getDate())), new Date(), TimeUnit.MINUTES); // Узнаем сколько минут прошло с момента сообщения
+            if(dateDiff>40){
+                System.out.println("datediff>40");
+                return; // если прошло больше 40 минут то пропускаем сообщение
+            }
             Message message = update.getMessage();
+            long sender = message.getFrom().getId();
             if(message.hasContact()){ // Если пользователь отправил свой номер телефона
-                User user;
-                try{
-                    user = userService.getUser(message.getContact().getUserID());
-                }
-                catch(UserNotFoundException e){
-                    return;
-                }
-                if(user.getPhoneNumber() != null) return; // если за пользователем уже закреплен номер то дальше не идем
-                if(!message.getContact().getFirstName().equals(message.getFrom().getFirstName())){ // Если имя в контакте не совпало с именем аккаунта отправителя
-                    logger.writeUserLog(user, "отправил чужой контакт");
-                    sendMsg(user,"Вы должны отправить свой контакт!");
+                Map<Long, User> registrationRequests = userService.getRegistrationRequests();
+                if(userService.userExists(sender) || !registrationRequests.containsKey(sender)) return;
+                User newUser = registrationRequests.get(sender);
+                if(sender != message.getContact().getUserId()){
+                    logger.log(newUser.getName()+ " отправил чужой контакт");
+                    sendMsg(sender,"Вы должны отправить свой контакт!");
                     return;
                 }
                 String phoneNumber = message.getContact().getPhoneNumber();
-                logger.writeUserLog(user, "отправил свой номер телефона: " + phoneNumber);
-                user.setPhoneNumber(phoneNumber);
-                userService.saveUser(user);
-                sendMsg(user, "Доступ разрешен");
+                newUser.setPhoneNumber(phoneNumber);
+                sendToSuperAdmin(String.format("%s(%d)\nТелефон:%s\nХочет зарегистрироваться.",newUser.getName(),newUser.getId(),newUser.getPhoneNumber()));
+                sendMsg(sender,"Заявка на регистрацию была отправлена администратору.");
                 return;
             }
             if(!update.getMessage().hasText()) return;
-            String text = message.getText().toLowerCase();
-
-            Integer sender = message.getFrom().getId();
+            String text = message.getText();
             long chatid = message.getChatId();
-
-            boolean confmessage = false;
-            if(chatid != sender){ // Сообщение из группового чата
-                    if(!userService.userExists(sender)) return;
-                    if(text.startsWith("@rtketthbot")){
-                        text = text.replace("@rtketthbot","").trim();
-                    }
-                    else return;
-            //    logger.log("Сообщение из группового чата: " + message.getChat().getTitle());
-            }
+            if(sender != chatid) return;
             User user;
             try{
                 user = userService.getUser(sender);
             }catch(UserNotFoundException e){
-                Map<Integer, String> registationRequests = userService.getRegistrationRequests();
+                Map<Long, User> registationRequests = userService.getRegistrationRequests();
                 String name = message.getFrom().getFirstName() + " " + message.getFrom().getLastName();
                 logger.log(String.format("*Незарегистрированный* %s(%d): %s", name, sender, text));
                 if(registationRequests.containsKey(sender)){
-                    sendMsg(sender, "Вы уже отправляли заявку на регистарцию");
+                    sendMsg(sender, "Вы уже отправляли заявку на регистрацию");
                     return;
                 }
                 if(name.contains("null")){
                     sendMsg(sender, "Неверный формат имени(не указано имя или фамилия в профиле)");
                     return;
                 }
-                sendToSuperAdmin("Пользователь " + name + "(" + sender + ") хочет зарегистрироваться");
-                sendMsg(sender, "Заявка на регистрацию была отправлена администратору");
-                registationRequests.put(sender, name);
+                sendGetContactButton(sender);
+                registationRequests.put(sender, new User(sender,name));
                 return;
             }
             if(user.isBanned()) return;
             logger.writeUserLog(sender, text);
             logger.debug(user);
-            if(user.getPhoneNumber() == null){
-                logger.writeUserLog(user, "У пользователя нет номера телефона, предлагаем ввести");
-                sendGetContactButton(sender);
-                return;
-            }
 
-            if(ANTIFLOOD_ENABLED && !user.isAdmin()){
-                int cmddif = (int) getDateDiff(user.getLastCMDDate(),TimeUnit.SECONDS);
-                if(cmddif < ANTIFLOOD_SECONDS && (user.getLastCMD().equals(text) || isInt(user.getLastCMD()) && isInt(text))){
-                    Date date = user.getLastCMDDate();
-                    date.setTime(date.getTime() + TimeUnit.SECONDS.toMillis((long) Math.abs(cmddif/1.8)));
-                    var newTimeout = ANTIFLOOD_SECONDS - getDateDiff(date, TimeUnit.SECONDS);
-                    sendMsg(sender, "Антифлуд(Осталось секунд:" + newTimeout + ")");
-                    logger.writeUserLog(user.getId(), "получил предупреждение за флуд");
-                    return;
-                }
-            }
-            user.setLastCMD(text);
             String[] args = text.split(" ");
             if(commandInvoker.isCommandAvailable(args[0])){
                 String result = commandInvoker.executeCommand(args[0], user, args);
                 sendMsg(sender, result);
                 return;
             }
-            if(text.equals("показать статус портов")){
-                commandInvoker.executeCommand("/status", user, args);
-            }else if(isInt(text)){
-                if(!user.isConnectedToSwitch()) {
+            if(commandInvoker.isCommandAvailable(text)){
+                String result = commandInvoker.executeCommand(text, user, args);
+                sendMsg(sender, result);
+                return;
+            }
+            if(isInt(text)){
+                if(!user.isConnectedToSwitch()){
                     sendMsg(sender, "Для выбора порта подключитесь к коммутатору.");
+                    return;
+                }
+                try{
+                    antifloodService.action("commutator:"+user.getSwitch().getIp(),8);
+                }catch(TimeoutException e){
+                    sendMsg(user, "Таймаут. Осталось секунд: " + e.getRemainingSeconds());
                     return;
                 }
                 portCMD(user, Integer.parseInt(text));
             }else if(text.startsWith(">")){
                 try{
-                    String ip = text.substring(text.indexOf(">") + 1).intern();
+                    String ip = text.substring(text.indexOf(">") + 1);
                     connect(user, InetAddress.getByName(ip).getHostAddress());
                 }catch(UnknownHostException e){
                     sendMsg(sender, "Не удалось подключиться к коммутатору: неверный ДНС");
@@ -204,7 +171,7 @@ public class Bot extends TelegramLongPollingBot {
                 int doubledot = text.indexOf(":");
                 if(doubledot != -1){
                     int port = Integer.parseInt(text.substring(doubledot + 1));
-                    String ip = text.substring(0, doubledot).intern();
+                    String ip = text.substring(0, doubledot);
                     connect(user, ip);
                     if(user.isConnectedToSwitch() && user.getSwitch().getIp().equals(ip)) portCMD(user, port);
                 }else connect(user, text);
@@ -240,18 +207,6 @@ public class Bot extends TelegramLongPollingBot {
         showSwitchList(user,allByStation);
     }
 
-    public void checkAuthorization(int userid, String text) {
-        if (text.equals("cpdtest.nvkz")) {
-            sendMsg(userid, "Это служебный логин");
-            return;
-        }
-        es.submit(() -> {
-            String authorizationMessage = Network.getAuthorization(text+"@kem");
-            if(authorizationMessage.equals("Логин не авторизован")) authorizationMessage = Network.getAuthorization(text);
-            sendMsg(userid, authorizationMessage);
-        });
-    }
-
     public void streetCMD(User user, String text){
         String house, street;
         if(!text.contains(" ")){
@@ -260,59 +215,47 @@ public class Bot extends TelegramLongPollingBot {
         }
         int lastsp = text.lastIndexOf(" ") + 1;
         street = text.substring(0, lastsp - 1);
-        if(street.length() < 4){
+        if(street.length() < 3){
             sendMsg(user, "Слишком короткий адрес");
             return;
         }
         house = text.substring(lastsp);
         if(house.contains("/") && house.length() > 6 || !house.contains("/") && house.length() > 4){
             sendMsg(user, "Неверный формат адреса.");
-            return;  // до 5 значений
-        }
-        if(house.equals("-")){
             return;
         }
-        List<Commutator> commutators = commutatorService.getAllByStreetAndHome(street, house);
+        if(house.equals("-")) return;
+        List<Commutator> commutators = commutatorService.getAllByAddress(street, house);
         showSwitchList(user, commutators);
     }
 
     public void portCMD(User user, int port){
         if(!user.isConnectedToSwitch()) return;
-        if(!user.getSwitch().ping(400)){
+        Commutator commutator = user.getSwitch();
+        if(!commutator.ping(300)){
             sendMsg(user, "Нет пинга. Вы были отключены от коммутатора.");
-            commutatorService.disconnect(user.getSwitch());
+            commutatorService.disconnect(commutator);
             user.setCommutator(null);
             return;
         }
-        Commutator commutator = user.getSwitch();
-        if(port>commutator.modelInfo().getPortsCount()+commutator.modelInfo().getUpLinkCount() || port < 1){
+        if(port>commutator.model().getPortsCount()+commutator.model().getUpLinkCount() || port < 1){
             sendMsg(user, "Неверный номер порта");
             return;
         }
         if(commutator.isAUpLink(port) && !user.getGroup().canWatchUplinks() && !user.isAdmin()){
-            sendMsg(user, "В доступен отказано!");
-            return;
-        }
-        if(commutator.getPortState(port)==2){
-            sendMsg(user, "Состояние: закрыт");
+            sendMsg(user, "В доступе отказано");
             return;
         }
         var keyboardBuilder = new KeyboardBuilder();
-        if(commutator.getErrorsCount(port) > 0 && commutator.supportingDropCounters() && user.getGroup().canClearCounters()){
-            keyboardBuilder.addButtonOnRow("Сброс ошибок", "clearcounters;" + user.getSwitch().getIp() + ";" + port);
-            keyboardBuilder.nextRow();
-        }
-        keyboardBuilder.addButtonOnRow("Перезагрузка порта", "restartport;" + user.getSwitch().getIp() + ";" + port);
-        keyboardBuilder.nextRow();
-        if(commutator.isTrunkPort(port) && commutator.supportingDDM() && user.getGroup().canWatchUplinks())
-            keyboardBuilder.addButtonOnRow("DDM", "ddm;" + commutator.getIp() + ";" + port);
-        if(commutator.supportingShowVlans())
-            keyboardBuilder.addButtonOnRow("Вланы", "showvlans;" + commutator.getIp() + ";" + port);
-        if(commutator.portLinkStatus(port))
-            keyboardBuilder.addButtonOnRow("Маки", "showmacs;" + commutator.getIp() + ";" + port);
-        InlineKeyboardMarkup inlineKeyboardMarkup = keyboardBuilder.build();
+        if(commutator.getErrorsCount(port) > 0 && commutator.supportingDropCounters() && user.getGroup().canClearCounters()) keyboardBuilder.addButtonOnRow("Сброс ошибок", "clearcounters;" + user.getSwitch().getIp() + ";" + port).nextRow();
+        keyboardBuilder.addButtonOnRow("Перезагрузка порта", "restartport;" + user.getSwitch().getIp() + ";" + port).nextRow();
+        if(commutator.isTrunkPort(port) && commutator.supportingDDM() && user.getGroup().canWatchUplinks()) keyboardBuilder.addButtonOnRow("DDM", "ddm;" + commutator.getIp() + ";" + port);
+        if(commutator.supportingShowVlans()) keyboardBuilder.addButtonOnRow("Вланы", "showvlans;" + commutator.getIp() + ";" + port);
+        if(commutator.portLinkStatus(port)) keyboardBuilder.addButtonOnRow("Маки", "showmacs;" + commutator.getIp() + ";" + port);
+        keyboardBuilder.addButtonNextRow("Обновить", String.format("refreshportinfo;%s;%d",user.getSwitch().getIp(),port));
+        InlineKeyboardMarkup markup = keyboardBuilder.build();
         String portInfo = commutator.getPortInfo(port);
-        sendMsg(user, portInfo, inlineKeyboardMarkup);
+        sendMsg(user, portInfo, markup);
     }
 
     public void showSwitchList(User user, List<Commutator> commutators){
@@ -325,21 +268,18 @@ public class Bot extends TelegramLongPollingBot {
         for(Commutator commutator : commutators){
             String ip = commutator.getIp();
             if(!ip.startsWith("10.42")) continue;
-            if(!user.getGroup().canConnectToAggregation() && commutator.modelInfo().isAgregation()) continue;
+            if(!user.getGroup().canConnectToAggregation() && commutator.model().isAgregation()) continue;
             StringBuilder message = new StringBuilder();
             int porch = commutator.getPorch();
             if(!Network.ping(ip, 270)) message.append("[OFF] ");
-            message.append("IP:").append(ip);
+            message.append(ip);
             if(porch != 0) message.append(".Подъезд:").append(porch);
             message.append("(").append(commutator.getVertical()).append(")");
-            if(commutator.modelInfo() != null ) message.append("\n\t| ").append(commutator.modelInfo().getModel());
+            if(commutator.model() != null ) message.append("\n\t| ").append(commutator.model().getModel());
             keyboardBuilder.addButtonOnRow(message.toString(), "ipadress;" + ip);
         }
-        sendMsg(user, "Найдено коммутаторов: "+keyboardBuilder.getRowsCount(), keyboardBuilder.build());
-        commutators.clear();
+        sendMsg(user, "Найдено коммутаторов: "+ keyboardBuilder.getRowsCount(), keyboardBuilder.build());
     }
-
-
 
     public boolean connect(User user, String ip) {
         if(user.isConnectedToSwitch() && user.getSwitch().getIp().equals(ip)) {
@@ -348,8 +288,8 @@ public class Bot extends TelegramLongPollingBot {
         }
         Commutator commutator;
         try{
-            commutator = commutatorService.connect(ip, rwCommunity);
-            if(!user.isAdmin() && commutator.modelInfo().isAgregation() && !user.getGroup().canConnectToAggregation()){
+            commutator = commutatorService.connect(ip);
+            if(!user.isAdmin() && commutator.model().isAgregation() && !user.getGroup().canConnectToAggregation()){
                 sendMsg(user, "В доступе отказано!");
                 logger.writeUserLog(user, "не смог подключиться к коммутатору " + commutator.getIp() + ". Нет прав доступа");
                 return false;
@@ -362,20 +302,66 @@ public class Bot extends TelegramLongPollingBot {
             return false;
         }
         catch(ConnectException e){
-            if(e.getCause() instanceof NullPointerException || e.getCause() instanceof NoSnmpAnswerException) SendToDebugChat("Видимо на коммутаторе " + ip + " нет коммьюнити engforta-rw");
+            if(e.getCause() instanceof NullPointerException || e.getCause() instanceof NoSnmpAnswerException) sendToSuperAdmin("Видимо на коммутаторе " + ip + " нет коммьюнити engforta-rw");
             sendMsg(user, "Не удалось подключиться к коммутатору...");
             return false;
         }
         catch(InvalidDatabaseOIDException e){
             sendToSuperAdmin("Указанный в базе данных ObjectID для коммутатора "+ip+" не соотвествует реальному");
-            sendMsg(user, "Не удалось подключиться к коммутатору...");
+            sendMsg(user, "Не удалось подключиться к коммутатору: неверный objectid");
+            return false;
+        }
+        catch(NoSnmpAnswerException e){
+            e.printStackTrace();
+            sendMsg(user, "Не удалось подключиться к коммутатору");
+            sendToSuperAdmin("Произошел no SNMP ANSWER EXCEPTION ПРИ ПОПЫТКЕ ПОДКЛЮЧЕНИЯ:"+ip);
             return false;
         }
         if(user.isConnectedToSwitch()) commutatorService.disconnect(user.getSwitch());
         user.setCommutator(commutator);
-        sendTextKeyboard(user.getId(),"Для выбора порта введите его номер в чат(1-" + commutator.modelInfo().getPortsCount() + ").","Показать статус портов");
+        sendTextKeyboard(user.getId(),"Для выбора порта введите его номер в чат(1-" + commutator.model().getPortsCount() + ").","Показать статус портов");
         logger.writeUserLog(user, "подключился к коммутатору " + ip);
         return true;
+    }
+
+
+    public void sendCommandList(User user){
+        sendMsg(user, "Как пользоваться ботом?"+
+                "\nДля подключения к коммутатору введите его адрес или ip-адрес в чат."+
+                "\nПосле подключения к коммутатору введите требуемый номер порта или команду /status для просмотра статуса всех портов на коммутаторе");
+        String commandList = commandInvoker.getCommandList(user);
+        sendMsg(user,commandList);
+    }
+
+    @Override
+    public String getBotUsername(){
+        return BOT_NAME;
+    }
+
+    @Override
+    public String getBotToken() { return BOT_API_KEY; }
+
+    @Scheduled(initialDelay = 60000*60*4, fixedRate = 60000*60*4) // Каждые 4 часа
+    public void commutatorDisconnector(){
+        System.out.println("Disconnecting all from switches");
+        userService.forEachUser( (id,user) -> {
+            if(user.isConnectedToSwitch()){
+                commutatorService.disconnect(user.getCommutator());
+                user.setCommutator(null);
+            }
+        });
+    }
+
+
+    public void deleteMessage(int messageId,long chatId){
+        DeleteMessage deleteMessage = new DeleteMessage();
+        deleteMessage.setMessageId(messageId);
+        deleteMessage.setChatId(String.valueOf(chatId));
+        try{
+            execute(deleteMessage);
+        }catch(TelegramApiException e){
+            e.printStackTrace();
+        }
     }
 
     public boolean editMessageText(long sender, int messageId, String newText){
@@ -407,17 +393,12 @@ public class Bot extends TelegramLongPollingBot {
         keyboardStorage.put(messageId,keyboard);
     }
 
-    public void sendToAdmins(String text){
-        userService.getAdminList().forEach(admin -> sendMsg(admin,text));
-    }
-
     public void sendToSuperAdmin(String text){
         sendMsg(810937833L,text);
     }
 
     public void SendToDebugChat(String text){
-        if(Main.isTestMode()) sendToSuperAdmin(text);
-        else sendMsg(-391675258L, text);
+        sendToSuperAdmin(text);
     }
 
     public void SendToUOSPD(String text){
@@ -425,37 +406,11 @@ public class Bot extends TelegramLongPollingBot {
         else sendMsg(-1001256854052L, text);
     }
 
-
-    public Message sendMsg(User user, String text){
-        return sendMsg(user.getId(),text);
+    public Message sendMsg(User recipient, String text) {
+        return sendMsg(recipient.getId(),text);
     }
 
-    public Message sendMsg(Long l, String text){
-        return sendMsg(Long.toString(l),text);
-    }
-
-    public Message sendMsg(String recipient, String text) {
-        if(text == null || text.isEmpty()) return null;
-        if(text.length()>MAX_MESSAGE_LENGTH && text.length() < 10000){
-            sendMsg(recipient,text.substring(0,MAX_MESSAGE_LENGTH));
-            return sendMsg(recipient,text.substring(MAX_MESSAGE_LENGTH));
-        }
-        try {
-            var sendMessage = SendMessage.builder().chatId(recipient).text(text).build();
-            return execute(sendMessage);
-        }
-        catch(TelegramApiException e){
-            try{
-                logger.log("Не удалось отправить сообщение пользователю:" + userService.getUser(Integer.parseInt(recipient)).getName());
-            }catch(UserNotFoundException userNotFoundException){
-                userNotFoundException.printStackTrace();
-            }
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    public Message sendMsg(int recipient, String text) {
+    public Message sendMsg(long recipient, String text) {
         if(text == null || text.isEmpty()) return null;
         if(text.length()>MAX_MESSAGE_LENGTH && text.length() < 10000){
             sendMsg(recipient,text.substring(0,MAX_MESSAGE_LENGTH));
@@ -475,7 +430,6 @@ public class Bot extends TelegramLongPollingBot {
             return null;
         }
     }
-
 
     public Message sendMsg(User user, String text, ReplyKeyboard keyboard) {
         return sendMsg(user.getId(), text, keyboard);
@@ -576,32 +530,4 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    public void sendCommandList(User user){
-        sendMsg(user, "Как пользоваться ботом?"+
-                "\nДля подключения к коммутатору введите его адрес или ip-адрес в чат."+
-                "\nПосле подключения к коммутатору введите требуемый номер порта или команду /status для просмотра статуса всех портов на коммутаторе");
-        String commandList = commandInvoker.getCommandList(user);
-        sendMsg(user,commandList);
-    }
-
-
-    @Override public String getBotUsername(){
-        return BOT_NAME;
-    }
-
-    @Override
-    public String getBotToken() {
-        return BOT_API_KEY;
-    }
-
-    @Scheduled(initialDelay = 60000*60*24, fixedRate = 60000*60*24)
-    public void commutatorDisconnector(){
-        System.out.println("Disconnecting all from switches");
-        userService.forEachUser( (id,u) -> {
-            if(u.isConnectedToSwitch()){
-                commutatorService.disconnect(u.getCommutator());
-                u.setCommutator(null);
-            }
-        });
-    }
 }

@@ -32,16 +32,24 @@ public class KeyboardBuilder{
         return rows;
     }
 
-    public void nextRow(){
+    public KeyboardBuilder nextRow(){
         rows.add(new ArrayList<>());
+        return this;
     }
 
-    public void addButtonOnRow(String buttonLabel,String buttonAction){
+    public KeyboardBuilder addButtonOnRow(String buttonLabel,String buttonAction){
         if(rows.get(rows.size() - 1).size() >= buttonOnRowLimit) nextRow();
         InlineKeyboardButton keyboardButton = new InlineKeyboardButton();
         keyboardButton.setText(buttonLabel);
         keyboardButton.setCallbackData(buttonAction);
         rows.get(rows.size() - 1).add(keyboardButton);
+        return this;
+    }
+
+    public KeyboardBuilder addButtonNextRow(String buttonLabel,String buttonAction){
+        nextRow();
+        addButtonOnRow(buttonLabel,buttonAction);
+        return this;
     }
 
     public InlineKeyboardMarkup build(){

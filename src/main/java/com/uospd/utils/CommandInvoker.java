@@ -23,7 +23,6 @@ public final class CommandInvoker{
     private Map<String, Pair<Object,Method>> controllerMap;
 
     public String getCommandList(User user){
-       // if(commandListCache.containsKey(user)) return commandListCache.get(user);
         StringBuilder stringBuilder = new StringBuilder(100);
         for(Map.Entry<String, Pair<Object, Method>> entry : controllerMap.entrySet()){
             Method method = entry.getValue().getSecond();
@@ -42,7 +41,6 @@ public final class CommandInvoker{
             stringBuilder.append(description).append("\n");
         }
         String result = stringBuilder.toString().intern();
-     //   commandListCache.put(user,result);
         return result;
     }
 
@@ -51,7 +49,7 @@ public final class CommandInvoker{
     }
 
     public String executeCommand(String cmd, User user, String[] args) {
-        if(!isCommandAvailable(cmd)) return null;
+        if(!isCommandAvailable(cmd)) return "Ошибка.";
         Pair<Object, Method> methodPair = controllerMap.get(cmd);
         Object controllerObject = methodPair.getFirst();
         Method commandMethod = methodPair.getSecond();

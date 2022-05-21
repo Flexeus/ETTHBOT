@@ -27,8 +27,11 @@ public class LoggingService {
 
     private String logdir;
     private String userslogdir;
+
     private File log;
     private File errorLog;
+    private File connectionsLog;
+
     private final DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
     private String currentDate = dateFormat.format(new Date());
     private final Charset charset = Charset.forName("cp1251");
@@ -44,11 +47,15 @@ public class LoggingService {
 
         File logDirectory = new File(logdir);
         if (!logDirectory.exists()) logDirectory.mkdir();
+
         File userLogDirectory = new File(userslogdir);
         if (!userLogDirectory.exists()) userLogDirectory.mkdir();
 
+
+
         log = createLogFile(currentDate,logdir);
         errorLog = createLogFile("error",logdir);
+        connectionsLog = createLogFile("connections",logdir);
 
         try{
             System.setErr(new DualStream(System.err, new PrintStream(new FileOutputStream(errorLog, true), true, charset)));
@@ -56,6 +63,7 @@ public class LoggingService {
             e.printStackTrace();
         }
     }
+
 
     private File createLogFile(String name,String directory){
         File file = new File(directory + name + ".log");
@@ -71,7 +79,7 @@ public class LoggingService {
         writeUserLog(user.getId(),str);
     }
 
-    public void writeUserLog(Integer id, String str) {
+    public void writeUserLog(Long id, String str) {
         User currentUser;
         try{
             currentUser = userService.getUser(id);
@@ -109,6 +117,16 @@ public class LoggingService {
         }
     }
 
+    public void connectionsLog(String str){
+        String message = String.format("%s %s", Functions.getTime(), str);
+        try(var osw = new OutputStreamWriter(new BufferedOutputStream(new FileOutputStream(connectionsLog, true)), charset)){
+            osw.write(message + lineSeparator);
+            osw.flush();
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+    }
+
     public void debug(String str) {
         if(Main.isTestMode()) System.out.println("[DEBUG] "+str);
     }
@@ -117,7 +135,7 @@ public class LoggingService {
         debug(obj.toString());
     }
 
-    public File getUserLogFile(Integer id){
+    public File getUserLogFile(Long id){
         return new File(userslogdir + id + ".log");
     }
 

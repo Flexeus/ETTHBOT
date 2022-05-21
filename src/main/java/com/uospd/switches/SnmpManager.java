@@ -153,7 +153,6 @@ public class SnmpManager{
         long count = tableOid.chars().filter(c -> !Character.isDigit(c)).count();
         if (events == null || events.size() == 0) {
             throw new RuntimeException("Error: Unable to read table...");
-           //return result;
         }
         for (TreeEvent event : events) {
             if (event == null) continue;

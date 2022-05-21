@@ -51,14 +51,14 @@ public class Main {
                 break;
             }
         }
-
         new AnnotationConfigApplicationContext(Main.class);
     }
 
+
     @Bean
-    public static Bot telegramBot(@Value("${bot.name}") String BOT_NAME, @Value("${bot.api_key}") String BOT_API_KEY) {
+    public static Bot telegramBot(@Value("${bot.name}") String BOT_NAME, @Value("${bot.api_key}") String BOT_API_KEY, @Value("${bot.test_api_key}") String TEST_BOT_API_KEY) {
         try {
-            Bot bot = new Bot(BOT_NAME,BOT_API_KEY);
+            Bot bot = new Bot(BOT_NAME,!testMode?BOT_API_KEY:TEST_BOT_API_KEY);
             TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
             botsApi.registerBot(bot);
             return bot;
@@ -85,7 +85,7 @@ public class Main {
 
     @Bean(name = "commandControllers")
     public static Map<String, Pair<Object,Method>> commandControllersBeans(ApplicationContext context){
-        Map<String,Pair<Object,Method>> map = new HashMap<>();
+        Map<String,Pair<Object,Method>> map = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         Map<String, Object> beans = context.getBeansWithAnnotation(BotController.class);
 
         beans.forEach( (k,v) -> {
@@ -109,8 +109,7 @@ public class Main {
             Method[] methods = v.getClass().getMethods();
             for(Method method : methods){
                 if(!method.isAnnotationPresent(Callback.class)) continue;
-                Callback annotation = method.getAnnotation(Callback.class);
-                String value = annotation.value();
+                String value = method.getName();
                 Pair<Object, Method> of = Pair.of(v,method);
                 map.put(value, of);
             }

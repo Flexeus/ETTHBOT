@@ -6,8 +6,10 @@ import com.uospd.repositories.StationRepository;
 import com.uospd.switches.*;
 import com.uospd.switches.exceptions.ConnectException;
 import com.uospd.switches.exceptions.InvalidDatabaseOIDException;
+import com.uospd.switches.exceptions.NoSnmpAnswerException;
 import com.uospd.switches.exceptions.UnsupportedCommutatorException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
@@ -21,6 +23,8 @@ public class CommutatorService {
     private final CommutatorConnector commutatorConnector;
     private final StationRepository stationRepository;
 
+    @Value("${rwcommunity}") private String rwCommunity;
+
     public List<Station> getStations(){
         return stationRepository.findAll();
     }
@@ -29,13 +33,12 @@ public class CommutatorService {
         Optional<Station> optional = stationRepository.findByTypeAndNumber(type.toUpperCase(), number);
         if(optional.isEmpty()) return Collections.emptyList();
         Station station = optional.get();
-        List<Commutator> commutators = getAllByStreetAndHome(station.getStreet(), station.getHome());
+        List<Commutator> commutators = getAllByAddress(station.getStreet(), station.getHome());
         if(commutators == null || commutators.isEmpty()) return Collections.emptyList();
         else return commutators;
-
     }
 
-    public List<Commutator> getAllByStreetAndHome(String street, String home){
+    public List<Commutator> getAllByAddress(String street, String home){
         return commutatorRepository.findAllByStreetContainingAndHomeEquals(street,home);
     }
 
@@ -43,12 +46,12 @@ public class CommutatorService {
         return commutatorRepository.findByIp(ip).orElseThrow(() ->new UnsupportedCommutatorException("Commutator with such ip address not found in database"));
     }
 
-    public Commutator connect(String ip, String community) throws UnsupportedCommutatorException, ConnectException, InvalidDatabaseOIDException{
-        return commutatorConnector.getFeaturedCommutator(getCommutator(ip), community);
+    public Commutator connect(String ip) throws UnsupportedCommutatorException, ConnectException, InvalidDatabaseOIDException, NoSnmpAnswerException{
+        return commutatorConnector.getFeaturedCommutator(getCommutator(ip), rwCommunity);
     }
 
 
-    public Commutator connect(Commutator commutator,String community) throws UnsupportedCommutatorException, ConnectException, InvalidDatabaseOIDException{
+    public Commutator connect(Commutator commutator,String community) throws UnsupportedCommutatorException, ConnectException, InvalidDatabaseOIDException, NoSnmpAnswerException{
         return commutatorConnector.getFeaturedCommutator(commutator, community);
     }
 
@@ -67,14 +70,13 @@ public class CommutatorService {
                 .append(". Адрес: ").append(commutator.getStreet()).append(",").append(commutator.getHome()).append('.');
         if(commutator.getPorch() != 0) info.append(" Подъезд: " ).append(commutator.getPorch());
         info.append("(").append(commutator.getVertical()).append(")");
-        if (commutator.modelInfo().isAgregation()) info.append("\nHostname: ").append(commutator.getHostName());
-        info.append("\nМодель: ").append(commutator.modelInfo().getModel());
+        if (commutator.model().isAgregation()) info.append("\nHostname: ").append(commutator.getHostName());
+        info.append("\nМодель: ").append(commutator.model().getModel());
         return info.toString();
     }
 
     public List<Commutator> getAllCommutators(){
         return commutatorRepository.findAll();
     }
-
 
 }

@@ -2,9 +2,8 @@ package com.uospd;
 
 import com.uospd.services.CommutatorService;
 import com.uospd.switches.Commutator;
-import com.uospd.switches.exceptions.ConnectException;
 import com.uospd.switches.exceptions.InvalidDatabaseOIDException;
-import com.uospd.switches.exceptions.UnsupportedCommutatorException;
+import com.uospd.switches.exceptions.NoSnmpAnswerException;
 import com.uospd.utils.Functions;
 import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;
@@ -33,20 +32,19 @@ public class ErrorsMonitor{
     @Autowired private CommutatorService commutatorService;
     @Autowired private Bot bot;
 
+    private boolean activated = true;
     private List<Commutator> commutators;
     private final Map<PortInfo, Integer> errorsMap = new HashMap<>();
     private final Map<PortInfo, Integer> warningsMap = new HashMap<>();
 
-
-    private final int CHECK_TIME = 30;// в минутах;
-    private final int UNWARNING_TIME = 72; // в часах;
+    private final int CHECK_TIME = 60;// Частота проверок ошибок в минутах;
+    private final int UNWARNING_TIME = 120; // Время для снятия ошибок в часах;
 
     @Value("${rwcommunity}")
     private String COMMUNITY;
 
     @Value("${bot.errorsmonitor.warn_errors_count}")
     private int WARN_ERRORS_COUNT;
-
 
     @PostConstruct
     public void init(){
@@ -56,6 +54,7 @@ public class ErrorsMonitor{
 
     @Scheduled(fixedDelay = UNWARNING_TIME * 60 * 60000,initialDelay = UNWARNING_TIME * 60 * 60000)
     public void secondTimer(){
+        if(!activated) return;
         System.out.println("Снятие варнов...");
         warningsMap.entrySet().stream()
                 //.filter(entry -> entry.getValue() == 4)
@@ -67,11 +66,12 @@ public class ErrorsMonitor{
 
     @Scheduled(fixedDelay = CHECK_TIME * 60000,initialDelay =  3000)
     public void checkErrors(){
+        if(!activated) return;
         System.out.println(Functions.getTime()+" Проверка на ошибки запущена");
         for(Commutator c : commutators){
             try{
                 Commutator commutator = commutatorService.connect(c, COMMUNITY);
-                int portsCount = commutator.modelInfo().getPortsCount()+commutator.modelInfo().getUpLinkCount();
+                int portsCount = commutator.model().getPortsCount()+commutator.model().getUpLinkCount();
                 for(int i = 1;i <= portsCount;i++){
                     if(!commutator.isTrunkPort(i)) continue;
                     int errorsCount = commutator.getErrorsCount(i);
@@ -83,10 +83,11 @@ public class ErrorsMonitor{
                             int warningCount = warningsMap.getOrDefault(portInfo, 0)+1;
                             warningsMap.put(portInfo, warningCount); // то накапливаем варнинги, чтобы убедиться, что рост ошибок постоянен
                             if(warningCount == 3) // если накопилось 3 варнинга, то ошибки точно копятся постоянно - отсылаем сообщение
-                                bot.SendToUOSPD(String.format("Фиксируется накопление ошибок на %s:%d \n" +
-                                                "Hostname: %s\n" +
-                                                "Ошибок: %d\n" +
-                                                "Накопилось за %d минут: %d", commutator.getIp(), i, commutator.getHostName(),
+                                bot.SendToUOSPD(String.format("""
+                                                Фиксируется накопление ошибок на %s:%d
+                                                "Hostname: %s
+                                                "Ошибок: %d
+                                                "Накопилось за %d минут: %d""", commutator.getIp(), i, commutator.getHostName(),
                                         errorsCount, CHECK_TIME, errorsCount-oldErrorsCount));
                         }
                     }
@@ -94,9 +95,19 @@ public class ErrorsMonitor{
                 }
                 commutatorService.disconnect(commutator);
             }
-            catch(ConnectException | UnsupportedCommutatorException ignored){ }
-            catch(InvalidDatabaseOIDException e){ e.printStackTrace(); }
+            catch(InvalidDatabaseOIDException | NoSnmpAnswerException e){ e.printStackTrace(); }
+            catch(Exception ignored){ }
+
         }
         System.out.println(Functions.getTime()+" Проверка на ошибки завершена");
+    }
+
+    public void ignore(String ip){
+        commutators.removeIf(x->x.getIp().equals(ip));
+    }
+
+
+    public void changeState(){
+        activated = !activated;
     }
 }

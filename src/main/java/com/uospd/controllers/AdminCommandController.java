@@ -25,7 +25,6 @@ public class AdminCommandController{
     @Autowired private LoggingService logger;
     @Autowired private CommutatorService commutatorService;
 
-
     @Command(value = "/msg",description = "/msg [id] [text] - отправка сообщений пользователю")
     public void messageCommand(User user, String args[]){
         if (args.length == 1) { bot.sendMsg(user, "Не указан senderID"); return; }
@@ -48,7 +47,7 @@ public class AdminCommandController{
             bot.sendMsg(id, msg);
         }
         else {
-            Integer newsender = Integer.parseInt(args[1]);
+            Long newsender = Long.parseLong(args[1]);
             if (!userService.userExists(newsender)) {
                 bot.sendMsg(user, "Такой пользователь не зарегистрирован");
                 return;
@@ -64,7 +63,7 @@ public class AdminCommandController{
             return;
         }
         if(!isInt(args[1])){ // если вводит не число, то это имя пользователя
-            int id = userService.getIdByName(args[1]);
+            long id = userService.getIdByName(args[1]);
             if(id == -1){
                 bot.sendMsg(user, "Пользователь не найден");
                 return;
@@ -77,7 +76,7 @@ public class AdminCommandController{
             bot.sendFile(user.getId(), logfile);
             return;
         }
-        int arg = Integer.parseInt(args[1]);
+        long arg = Long.parseLong(args[1]);
         if(userService.userExists(arg)){
             File logfile = logger.getUserLogFile(arg);
             if(!logfile.exists()){
@@ -99,16 +98,24 @@ public class AdminCommandController{
             e.printStackTrace();
             bot.sendMsg(user, "Не удалось вывести лог");
         }
-
     }
 
     @Command(value = "/t" ,description = "/t - отправка telnet команд на коммутатор")
     public void telnetCommand(User user, String[] args){
+        if(args.length == 1){
+            bot.sendMsg(user, "Не указаны команды");
+            return;
+        }
         String text = String.join(" ", args);
-        String result = user.getSwitch().executeTelnetCommand(text.substring(text.indexOf(" ")).trim());
+        String result = null;
+        try{
+            result = user.getSwitch().executeAndRead(text.substring(text.indexOf(" ")));
+        }catch(Exception e){
+            e.printStackTrace();
+        }
         bot.sendMsg(user, result);
-
     }
+
 
     @Command(value = "/showuser",description = "/showuser [id] - получить ссылку на профиль пользователя")
     public void showUser(User user, String[] args)
@@ -121,16 +128,13 @@ public class AdminCommandController{
         bot.sendMsgWithHTML(user.getId(), getAsLink("Click", "tg://user?id=" + userid));
     }
 
-
     @Command("/switches")
     public void switchesCommand(User user){
         bot.sendMsg(user, userService.getUsersConnections());
     }
 
     @Command(value = "/registered",description = "/registered - список зарегистрированных пользователей")
-    public void registeredCommand(User user){
-        bot.sendMsgWithHTML(user.getId(), userService.getRegisteredUsersList());
-    }
+    public void registeredCommand(User user){ bot.sendMsgWithHTML(user.getId(), userService.getRegisteredUsersList()); }
 
     @Command(value = "/phones",description = "/phones - показать номера телефонов пользователей")
     public void phonesCommand(User user){

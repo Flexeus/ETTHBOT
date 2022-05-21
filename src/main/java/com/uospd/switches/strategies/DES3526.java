@@ -28,8 +28,8 @@ public class DES3526  implements DLinkCableTestStrategy, DropCountersStrategy {
     }
 
     @Override
-    public String dropCounters(Commutator commutator,int port) {
-        return "clear counters ports "+port;
+    public void dropCounters(Commutator commutator,int port) throws Exception{
+        commutator.executeTelnetCommands( "clear counters ports "+port,"exit");
     }
 }
 

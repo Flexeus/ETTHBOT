@@ -4,7 +4,6 @@ import com.uospd.switches.Commutator;
 import lombok.*;
 
 import javax.persistence.*;
-import java.util.Date;
 
 @Entity
 @Table(name = "bot_users",catalog = "telebot")
@@ -14,7 +13,7 @@ import java.util.Date;
 public class User implements Comparable<User>{
     @Id @Setter(value = AccessLevel.PRIVATE)
     @Column(name = "SenderID",nullable = false,unique = true)
-    private int id;
+    private long id;
 
     @JoinColumn(name = "group_id",nullable = false)
     @ManyToOne
@@ -26,17 +25,22 @@ public class User implements Comparable<User>{
     @Column(name = "PhoneNumber",unique = true)
     private String phoneNumber;
 
+    private transient String city;
     private transient boolean banned;
-    private transient String lastCMD;
-    private transient Date lastCMDDate  = new Date();
     @Transient private transient Commutator commutator;
 
-    public User(Integer id,String Name){
+    public User(long id,String Name){
         this.id = id;
         this.name = Name;
     }
 
-    public User(Integer id, String Name, Group group, String phoneNumber){
+    public User(long id,String Name, String phoneNumber){
+        this.id = id;
+        this.name = Name;
+        this.phoneNumber = phoneNumber;
+    }
+
+    public User(long id, String Name, Group group, String phoneNumber){
         this.group = group;
         this.id = id;
         this.name = Name;
@@ -52,7 +56,6 @@ public class User implements Comparable<User>{
 
     public void setCommutator(Commutator commutator){
         this.commutator = commutator;
-        setLastCMD("");
     }
 
     public Commutator getSwitch(){
@@ -62,16 +65,6 @@ public class User implements Comparable<User>{
 
     public boolean isConnectedToSwitch(){
         return commutator != null;
-    }
-
-    public void setLastCMD(String cmd){
-        this.lastCMD = cmd;
-        lastCMDDate = new Date();
-    }
-
-    public String getLastCMD() {
-        if(lastCMD == null) return "";
-        return lastCMD;
     }
 
     @Override

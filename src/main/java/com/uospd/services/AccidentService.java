@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -23,7 +24,7 @@ public class AccidentService{
     public String getUPSwitches(){
         List<Accident> upSwitches = accidentRepository.findAllByState(1)
                 .stream()
-                .filter(a -> getDateDiff(a.getDate(), TimeUnit.MINUTES) < 60)
+                .filter(a -> getDateDiff(a.getDate(), new Date(), TimeUnit.MINUTES) < 60)
                 .limit(30)
                 .collect(Collectors.toList());
         return buildAccidentList("Поднялись:", upSwitches);
@@ -34,6 +35,8 @@ public class AccidentService{
         downSwitches = downSwitches.stream()
                 .limit(30)
                 .filter(x-> !Network.ping(x.getIp(),300))
+
+                ///TODO: Сделать лучше
                 .sorted(Comparator.comparingLong(x -> x.getDate().getTime()))
                 .collect(Collectors.toList());
         return buildAccidentList("В аварии:", downSwitches);

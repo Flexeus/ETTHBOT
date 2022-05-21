@@ -7,7 +7,7 @@ import com.uospd.switches.exceptions.NoSnmpAnswerException;
 @CommutatorStrategyComponent("1.3.6.1.4.1.171.10.113.1.3")
 public class DES3200_28 extends DES3526{
 
-    public String snmpCableTest(int port, Commutator commutator) throws NullPointerException {
+    public String snmpCableTest(int port, Commutator commutator){
         commutator.snmpSet("1.3.6.1.4.1.171.12.58.1.1.1.12."+port,1);
         try {
             Thread.sleep(500);

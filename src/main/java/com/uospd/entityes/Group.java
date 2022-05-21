@@ -36,7 +36,7 @@ public class Group{
 
     @Override public String toString(){
         return "Group{" +
-                ", name='" + name + '\'' +
+                ", name=" + name +
                 ", canClearCounters=" + canClearCounters +
                 ", canConnectToAggregation=" + canConnectToAggregation +
                 ", canWatchUplinks=" + canWatchUplinks +

@@ -9,7 +9,6 @@ import com.uospd.switches.interfaces.DropCountersStrategy;
 
 @CommutatorStrategyComponent("1.3.6.1.4.1.171.10.75.15.3")
 public class DES1210B3 implements DDMStrategy, DLinkCableTestStrategy, DropCountersStrategy{
-
     @Override
     public String snmpCableTest(int port, Commutator commutator){
         try{
@@ -35,7 +34,7 @@ public class DES1210B3 implements DDMStrategy, DLinkCableTestStrategy, DropCount
     }
 
     @Override
-    public String dropCounters(Commutator commutator,int port) {
-        return "clear counters ports "+port;
+    public void dropCounters(Commutator commutator,int port) throws Exception{
+        commutator.executeTelnetCommands("clear counters ports "+port);
     }
 }

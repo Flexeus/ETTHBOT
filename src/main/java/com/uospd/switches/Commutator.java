@@ -11,6 +11,8 @@ import javax.persistence.*;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @Table(name = "realip",catalog = "monitoring")
@@ -53,20 +55,52 @@ public class Commutator{
     private transient String telnetLogin;
     private transient String telnetPassword;
     private transient SnmpManager snmpManager;
+    private transient String createdCommunity;
+
+    private transient List<Class<? extends CommutatorStrategy>> strategyList = new ArrayList<>();
     private transient CableTestStrategy cableTestStrategy;
     private transient DDMStrategy ddmStrategy;
     private transient DropCountersStrategy dropCountersStrategy;
-    private transient VlanShowing vlanShowing;
+    private transient VlanShowingStrategy vlanShowingStrategy;
+    private transient CommunityCreateStrategy communityCreateStrategy;
 
     public Commutator(String ip) {
         this.ip = ip;
     }
 
+    public boolean hasStrategy(Class<? extends CommutatorStrategy> strategyClass){
+        for(Class<? extends CommutatorStrategy> cl : strategyList){
+            Class<?>[] interfaces = cl.getInterfaces();
+            for(Class<?> interf: interfaces) if(interf == strategyClass) return true;
+        }
+
+
+        if(cableTestStrategy!= null && cableTestStrategy.getClass().isInstance(strategyClass)) return true;
+        if(ddmStrategy!= null){
+            Class<?>[] interfaces = ddmStrategy.getClass().getInterfaces();
+            for(Class<?> cl: interfaces) if(cl == strategyClass) return true;
+        }
+        if(dropCountersStrategy!= null){
+            Class<?>[] interfaces = dropCountersStrategy.getClass().getInterfaces();
+            for(Class<?> cl: interfaces) if(cl == strategyClass) return true;
+        }
+        if(vlanShowingStrategy!= null){
+            Class<?>[] interfaces = vlanShowingStrategy.getClass().getInterfaces();
+            for(Class<?> cl: interfaces) if(cl == strategyClass) return true;
+        }
+        if(communityCreateStrategy != null){
+            Class<?>[] interfaces = communityCreateStrategy.getClass().getInterfaces();
+            for(Class<?> cl: interfaces) if(cl == strategyClass) return true;
+        }
+        return false;
+    }
+
     public void setStrategy(CommutatorStrategy commutatorStrategy){
         if(commutatorStrategy instanceof CableTestStrategy) cableTestStrategy = (CableTestStrategy) commutatorStrategy;
         if(commutatorStrategy instanceof DropCountersStrategy) dropCountersStrategy = (DropCountersStrategy) commutatorStrategy;
-        if(commutatorStrategy instanceof VlanShowing) vlanShowing = (VlanShowing) commutatorStrategy;
+        if(commutatorStrategy instanceof VlanShowingStrategy) vlanShowingStrategy = (VlanShowingStrategy) commutatorStrategy;
         if(commutatorStrategy instanceof DDMStrategy) ddmStrategy = (DDMStrategy) commutatorStrategy;
+        if(commutatorStrategy instanceof CommunityCreateStrategy) communityCreateStrategy = (CommunityCreateStrategy) commutatorStrategy;
     }
 
     public void setTelnetParams(String login,String password){
@@ -74,12 +108,12 @@ public class Commutator{
         this.telnetPassword = password;
     }
 
-    public void enableSnmp(String community) throws ConnectException{
+    public void enableSnmp(String community) throws ConnectException {
         if(ip == null) throw new ConnectException("IP is null");
         try {
             snmpManager = new SnmpManager(ip, community);
         } catch (IOException e){
-            snmpManager = null;
+            this.disconnectSnmp();
             throw new ConnectException("Failed to create snmp connection",e);
         }
     }
@@ -93,14 +127,19 @@ public class Commutator{
     }
 
     public String getPortInfo(int port){
-        if(getPortState(port) == 2) return "Порт закрыт";
-        String pInfo = "Порт: " + port + "" +
-                "\nОписание: " + getPortDescription(port) +
-                "\nСостояние: открыт" +
-                "\nЛинк: " + (portLinkStatus(port) ? "есть" : "нет") + "(" + getPortSpeed(port) + " мбит)" +
-                "\nОшибок: " + getErrorsCount(port) + "\n";
-        if(!isAUpLink(port) && !modelInfo.isAgregation()) pInfo += snmpCableTest(port);
-        return pInfo;
+        try{
+            int portState = getPortState(port);
+            StringBuilder portInfo = new StringBuilder("Порт: " + port);
+            portInfo.append("\nОписание: " + getPortDescription(port));
+            portInfo.append("\nСостояние: " + (portState == 2 ? "Закрыт" : "Открыт"));
+            if(portState != 2)
+                portInfo.append("\nЛинк: " + (portLinkStatus(port) ? "есть(" + getPortSpeed(port) + " мбит)" : "нет"));
+            portInfo.append("\nОшибок: " + getErrorsCount(port));
+            if(!isAUpLink(port) && !modelInfo.isAgregation()) portInfo.append("\n" + cableTest(port));
+            return portInfo.toString();
+        }catch(NoSnmpAnswerException e){
+            return "Не удалось получить состояние порта";
+        }
     }
 
     public String getDDMInfo(int port){
@@ -108,15 +147,14 @@ public class Commutator{
         return ddmStrategy.getDDMInfo(snmpPort(port),this);
     }
 
-    public String snmpCableTest(int port){
+    public String cableTest(int port){
         if(cableTestStrategy == null) return "Кабель-тест не поддерживается на данном коммутаторе";
         return cableTestStrategy.snmpCableTest(port,this);
     }
 
-    public void dropCounters(int port){
+    public void dropCounters(int port) throws Exception{
         if(dropCountersStrategy == null) return;
-        String command = dropCountersStrategy.dropCounters(this, port);
-        Telnet telnet = new Telnet(telnetLogin, telnetPassword, this, command);
+        dropCountersStrategy.dropCounters(this, port);
     }
 
     public String getHostName(){
@@ -128,16 +166,17 @@ public class Commutator{
     }
 
     public String showVlans(int port){
-        return vlanShowing.showVlans(port,this);
+        return vlanShowingStrategy.showVlans(port,this);
     }
 
-    public int getPortState(int port){ // 1 - up, 2 - down.
-            return Integer.parseInt(getResponse(PORT_STATE_OID + snmpPort(port),"2"));
+    public int getPortState(int port) throws NoSnmpAnswerException{ // 1 - up, 2 - down.
+            return Integer.parseInt(getResponse(PORT_STATE_OID + snmpPort(port)));
     }
 
     public int getErrorsCount(int port){
         return Integer.parseInt(getResponse(PORT_ERRORS_OID + snmpPort(port),"0"));
     }
+
     public int getErrorsCountWithError(int port) throws NoSnmpAnswerException{
         return Integer.parseInt(getResponse(PORT_ERRORS_OID + snmpPort(port)));
     }
@@ -153,7 +192,7 @@ public class Commutator{
 
     public String getPortsStatus(){
         StringBuilder finalstr = new StringBuilder("Порт    Линк    Описание\n");
-        for(int i = 1;i <= modelInfo().getPortsCount() + modelInfo().getUpLinkCount();i++){
+        for(int i = 1;i <= model().getPortsCount() + model().getUpLinkCount();i++){
             String tempi = String.valueOf(i < 10 ? "0" + i : i);
             String link = (portLinkStatus(i) ? "UP" : "      ");
             finalstr.append(tempi).append("         ").append(link).append("         ").append(getPortDescription(i)).append("\n");
@@ -167,7 +206,7 @@ public class Commutator{
         return all;
     }
 
-    public CommutatorModel modelInfo() {
+    public CommutatorModel model() {
         return modelInfo;
     }
 
@@ -226,7 +265,7 @@ public class Commutator{
         return dropCountersStrategy != null;
     }
     public boolean supportingShowVlans(){
-        return vlanShowing != null;
+        return vlanShowingStrategy != null;
     }
 
     public int snmpPort(int port){
@@ -234,12 +273,21 @@ public class Commutator{
         return modelInfo.getFirstPortID()-1+port;
     }
 
-    public String executeTelnetCommand(String cmd){
-       // telnet = new Telnet(telnetLogin, telnetPassword, this, false, cmd);
+    public String executeAndRead(String...cmd) throws Exception{
         telnet = new Telnet(telnetLogin,telnetPassword,this);
-        telnet.sendcommand(cmd,false);
+        telnet.send(cmd);
+        //  telnet.close();
         return telnet.returnCMDResult();
     }
+
+    public void executeTelnetCommands(String...cmd) throws Exception{
+        telnet = new Telnet(telnetLogin,telnetPassword,this);
+        System.out.println("перед отправкой команд");
+        telnet.send(cmd);
+        telnet.close();
+    }
+
+
 
     public String getResponse(String response) throws NoSnmpAnswerException{
         if(snmpManager == null) throw new NullPointerException("SnmpManager are null");
@@ -249,16 +297,12 @@ public class Commutator{
     public String getResponse(String response, String onException){
         try{
             return snmpManager.getResponse(response);
-        }catch(NoSnmpAnswerException e){
+        }catch(NoSnmpAnswerException | NullPointerException e ){
             System.out.println(e.getMessage());
             return onException;
         }
     }
 
-    public Map<String, String> walkExtract(String oid){
-        if(snmpManager == null) throw new NullPointerException("SnmpManager are null");
-        return snmpManager.walkExtract(oid);
-    }
 
     public void snmpSet(String response, int value){
         if(snmpManager == null) throw new NullPointerException("SnmpManager are null");
@@ -280,11 +324,13 @@ public class Commutator{
         catch (IOException e){ return false; }
     }
 
-    public final void disconnect(){
-        if(snmpManager == null) return;
+    public final void disconnectSnmp(){
+
         try{
+            if(createdCommunity!=null) deleteCommunity(createdCommunity);
+            if(snmpManager == null) return;
             snmpManager.stop();
-        }catch(IOException e){
+        }catch(Exception e){
             e.printStackTrace();
         }finally {
             snmpManager = null;
@@ -303,4 +349,15 @@ public class Commutator{
                 '}';
     }
 
+    public void createCommunity(String community) throws Exception{
+        communityCreateStrategy.writeCommunity(community,this);
+        createdCommunity = community;
+    }
+    public void deleteCommunity(String community) throws Exception{
+        communityCreateStrategy.deleteCommunity(community,this);
+    }
+
+    public Telnet telnet(){
+        return telnet;
+    }
 }

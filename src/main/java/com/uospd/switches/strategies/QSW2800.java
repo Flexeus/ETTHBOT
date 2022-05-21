@@ -9,8 +9,8 @@ import com.uospd.switches.Commutator;
 public class QSW2800 extends QSW4610 {
 
     @Override
-    public String dropCounters(Commutator commutator, int port){
-        return "clear counters interface ethernet 1/"+port;
+    public void dropCounters(Commutator commutator, int port) throws Exception{
+        commutator.executeTelnetCommands("clear counters interface ethernet 1/"+port,"exit");
     }
 
 }
