@@ -1,6 +1,7 @@
-package com.uospd.utils;
+package com.uospd.services;
 
 import com.uospd.entityes.User;
+import com.uospd.utils.TimeoutException;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.beans.factory.annotation.Autowired;

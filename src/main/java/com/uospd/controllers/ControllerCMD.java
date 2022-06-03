@@ -8,7 +8,7 @@ import com.uospd.entityes.User;
 import com.uospd.services.AccidentService;
 import com.uospd.services.CommutatorService;
 import com.uospd.switches.Commutator;
-import com.uospd.utils.AntifloodService;
+import com.uospd.services.AntifloodService;
 import com.uospd.utils.KeyboardBuilder;
 import com.uospd.utils.Network;
 import com.uospd.utils.TimeoutException;
@@ -36,7 +36,7 @@ public class ControllerCMD{
     }
 
     @Command(value = {"/auth"}, description = "/auth - проверка авторизации")
-    public void checkAuthorizationCMD(User user, String args[]) throws TimeoutException{
+    public void checkAuthorizationCMD(User user, String args[]){
         if(args.length == 1){
             bot.sendMsg(user,"Не указан логин");
             return;
@@ -66,7 +66,7 @@ public class ControllerCMD{
             return;
         }
         Commutator commutator = user.getSwitch();
-        antifloodService.action("commutator:"+commutator.getIp(),8);
+        antifloodService.timeoutCheck("commutator:"+commutator.getIp());
         boolean ping = commutator.ping(300);
         if(!ping){
             bot.sendMsg(user,"Нет пинга. Вы были отключены от коммутатора.");
@@ -75,6 +75,7 @@ public class ControllerCMD{
             return;
         }
         bot.sendMsg(user,commutator.getPortsStatus());
+        antifloodService.action("commutator:"+commutator.getIp(),8);
     }
 
     @Command(value = "/clink",description = "/clink - проверка на подъем/падение линка на всех портах")
@@ -83,7 +84,7 @@ public class ControllerCMD{
             bot.sendMsg(user, "Вы не подключены к коммутатору");
             return;
         }
-        antifloodService.action("commutator:"+user.getSwitch().getIp(),15);
+        antifloodService.timeoutCheck("commutator:"+user.getSwitch().getIp());
         botExecutor.submit(() -> {
             int[] before = user.getSwitch().getAllLinks();
             bot.sendMsg(user, "Таймер запущен на 8 секунд.");
@@ -100,6 +101,7 @@ public class ControllerCMD{
             if(chan == 0) finalmsg = new StringBuilder("Статус линка на всех портах остался прежним");
             bot.sendMsg(user, finalmsg.toString());
         });
+        antifloodService.action("commutator:"+user.getSwitch().getIp(),20);
     }
 
     @SneakyThrows

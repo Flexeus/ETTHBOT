@@ -8,11 +8,8 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class Telnet{
-    private ExecutorService exec = Executors.newSingleThreadExecutor();
     private String login;
     private String pass;
     private InputStream inputStream;
@@ -20,34 +17,42 @@ public class Telnet{
     private boolean authorized;
     private PrintWriter writer;
     private int authAttempts;
+    private Commutator commutator;
+    boolean enableCMDSent = false;
 
     public Telnet(String login, String password, Commutator commutator) throws Exception{
         this.login = login;
         this.pass = password;
-            //     socket = new Socket(commutator.getIp(),23);
-            //    socket.setSoTimeout(5000);
-        try{
-            socket = new Socket();
-            socket.connect(new InetSocketAddress(commutator.getIp(), 23), 5000);
+        this.commutator = commutator;
+        socket = new Socket();
+    }
+
+    public boolean connect(){
+            try{
+            socket.connect(new InetSocketAddress(commutator.getIp(), 23), 2000);
             socket.setKeepAlive(true);
+            socket.setTcpNoDelay(true);
             inputStream = socket.getInputStream();
             writer = new PrintWriter(socket.getOutputStream());
             byte[] buffer = new byte[2056];
             int len;
             while((len = inputStream.read(buffer)) > 0){
-                if(!socket.isConnected()) break;
+                if(socket.isOutputShutdown()){
+                    System.out.println("SOCKET ISN'T CONNECTED");
+                    break;
+                }
                 String readchar = new String(buffer, 0, len);
                 //System.out.print(readchar);
                 if(!isAuthorized()){
                     if(authAttempts>5){
-                        System.out.println("Не удалось авторизоваться");
+                        System.out.println("Не удалось авторизоваться "+commutator.getIp()+". Закрытие сокета");
+                        socket.close();
                         break;
                     }
                     autoLogin(commutator, readchar);
-
                 }
                 if(readchar.trim().endsWith("#") || readchar.startsWith("%")){
-                    System.out.println("Авторизация на коммутаторе прошла");
+                    //System.out.println("Авторизация на коммутаторе прошла");
                     authorized = true;
                     break;
                 }
@@ -55,9 +60,8 @@ public class Telnet{
         }catch(IOException e){
             e.printStackTrace();
         }
-      //  System.out.println("поток телнета запущен");
+        return authorized;
     }
-
 
     public boolean isAuthorized(){
         return authorized;
@@ -65,13 +69,13 @@ public class Telnet{
 
 
     private void autoLogin(Commutator commutator, String readchar){
-        if(readchar.endsWith(">") && commutator.model().getModel().equals("MES5324")){
-            authAttempts++;
-            send("enable");
-            sleep();
+
+        if(enableCMDSent && readchar.contains("Password")){
             send("zorro");
+            sleep();
         }
-        else if(readchar.contains("Username") || readchar.contains("Login:") || readchar.endsWith("login:".trim()) || readchar.startsWith("User") || readchar.startsWith("login") || readchar.trim().endsWith("ame:")){
+
+        if(readchar.contains("Username") || readchar.contains("Login:") || readchar.endsWith("login:".trim()) || readchar.startsWith("User") || readchar.startsWith("login") || readchar.trim().endsWith("ame:")){
             authAttempts++;
             send(login);
         }
@@ -83,6 +87,7 @@ public class Telnet{
             authAttempts++;
             send("enable");
             sleep();
+            enableCMDSent = true;
         }
         else if(readchar.contains(":user#") && commutator.model().getModel().equals("DES-3526")){
             authAttempts++;
@@ -106,7 +111,6 @@ public class Telnet{
         }
     }
 
-
     public String returnCMDResult() throws IOException{
         byte[] buffer = new byte[1056];
         inputStream.read(buffer);
@@ -120,15 +124,14 @@ public class Telnet{
         Thread.sleep(150);
     }
 
-    @SneakyThrows
+
     public void send(String ... commands){
         for(String s : commands){
-            //System.out.println(Functions.getDate() + "Sending: " + s);
+            //System.out.println("Sending: " + s);
             writer.print(s + "\r\n");
             writer.flush();
-            Thread.sleep(200);
+            try{Thread.sleep(500);}catch(InterruptedException e){e.printStackTrace();}
         }
-
     }
 
 

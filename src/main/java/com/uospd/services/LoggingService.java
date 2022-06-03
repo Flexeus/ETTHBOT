@@ -51,8 +51,6 @@ public class LoggingService {
         File userLogDirectory = new File(userslogdir);
         if (!userLogDirectory.exists()) userLogDirectory.mkdir();
 
-
-
         log = createLogFile(currentDate,logdir);
         errorLog = createLogFile("error",logdir);
         connectionsLog = createLogFile("connections",logdir);

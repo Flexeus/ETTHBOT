@@ -34,7 +34,6 @@ public class Main {
         System.out.println("Starting...");
         Set<String> artifactoryLoggers = new HashSet<>(Arrays.asList(//"org.jboss.logging",
                 "org.apache.http",
-                //"groovyx.net.http",
                 "org.hibernate",
                 "org.springframework"
         ));
@@ -52,6 +51,7 @@ public class Main {
             }
         }
         new AnnotationConfigApplicationContext(Main.class);
+
     }
 
 

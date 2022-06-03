@@ -13,11 +13,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.telegram.telegrambots.meta.api.objects.Message;
 
 import javax.annotation.PostConstruct;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Component
 @ConditionalOnProperty(value = "bot.errorsmonitor.enabled", havingValue = "true")
@@ -37,8 +39,10 @@ public class ErrorsMonitor{
     private final Map<PortInfo, Integer> errorsMap = new HashMap<>();
     private final Map<PortInfo, Integer> warningsMap = new HashMap<>();
 
+    private final Map<PortInfo,Message> reportMap = new HashMap<>();
+
     private final int CHECK_TIME = 60;// Частота проверок ошибок в минутах;
-    private final int UNWARNING_TIME = 120; // Время для снятия ошибок в часах;
+    private final int UNWARNING_TIME = 240; // Время для снятия ошибок в часах;
 
     @Value("${rwcommunity}")
     private String COMMUNITY;
@@ -49,7 +53,7 @@ public class ErrorsMonitor{
     @PostConstruct
     public void init(){
         System.out.println("Мониторинг ошибок запущен");
-        commutators = commutatorService.getAllCommutators();
+        commutators = commutatorService.getAllCommutators().stream().filter(x->x.model().isAgregation()).collect(Collectors.toList());
     }
 
     @Scheduled(fixedDelay = UNWARNING_TIME * 60 * 60000,initialDelay = UNWARNING_TIME * 60 * 60000)
@@ -57,7 +61,7 @@ public class ErrorsMonitor{
         if(!activated) return;
         System.out.println("Снятие варнов...");
         warningsMap.entrySet().stream()
-                //.filter(entry -> entry.getValue() == 4)
+                .filter(entry -> entry.getValue() == 4)
                 .forEach(entry-> {
             entry.setValue(0);
             System.out.println("Варны сняты с "+entry.getKey().commutatorIP+":"+entry.getKey().port);
@@ -78,17 +82,27 @@ public class ErrorsMonitor{
                     PortInfo portInfo = new PortInfo(commutator.getIp(), i);
                     if(errorsMap.containsKey(portInfo)){
                         Integer oldErrorsCount = errorsMap.get(portInfo);
-                        if(errorsCount == 0 || errorsCount<oldErrorsCount) warningsMap.remove(portInfo); // если ошибки исчезли, но были варнинги, то убираем их
+                        if(errorsCount == 0){
+                            warningsMap.remove(portInfo); // если ошибки исчезли, но были варнинги, то убираем их
+                            if(reportMap.containsKey(portInfo)){
+                                Message message = reportMap.get(portInfo);
+                                bot.editMessageText(message.getFrom().getId(),message.getMessageId(),"Отредактировано.!");
+
+                            }
+                        }
                         if(errorsCount-oldErrorsCount >= WARN_ERRORS_COUNT){ // если с момента прошлой проверки накопилось n ошибок
                             int warningCount = warningsMap.getOrDefault(portInfo, 0)+1;
                             warningsMap.put(portInfo, warningCount); // то накапливаем варнинги, чтобы убедиться, что рост ошибок постоянен
                             if(warningCount == 3) // если накопилось 3 варнинга, то ошибки точно копятся постоянно - отсылаем сообщение
-                                bot.SendToUOSPD(String.format("""
-                                                Фиксируется накопление ошибок на %s:%d
-                                                "Hostname: %s
-                                                "Ошибок: %d
-                                                "Накопилось за %d минут: %d""", commutator.getIp(), i, commutator.getHostName(),
-                                        errorsCount, CHECK_TIME, errorsCount-oldErrorsCount));
+                            {
+                                Message message = bot.SendToUOSPD(String.format("""
+                                        Фиксируется накопление ошибок на %s:%d
+                                        Hostname: %s
+                                        Port description: %s
+                                        Ошибок: %d
+                                        Накопилось за %d минут: %d""", commutator.getIp(), i, commutator.getHostName(), commutator.getPortDescription(i), errorsCount, CHECK_TIME, errorsCount - oldErrorsCount));
+                                reportMap.put(portInfo,message);
+                            }
                         }
                     }
                     errorsMap.put(portInfo,errorsCount);
@@ -97,7 +111,6 @@ public class ErrorsMonitor{
             }
             catch(InvalidDatabaseOIDException | NoSnmpAnswerException e){ e.printStackTrace(); }
             catch(Exception ignored){ }
-
         }
         System.out.println(Functions.getTime()+" Проверка на ошибки завершена");
     }

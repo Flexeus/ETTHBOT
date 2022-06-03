@@ -1,14 +1,16 @@
-package com.uospd.utils;
+package com.uospd.services;
 
 import com.uospd.annotations.AdminController;
 import com.uospd.annotations.Command;
 import com.uospd.annotations.SuperAdminController;
 import com.uospd.entityes.User;
+import com.uospd.utils.TimeoutException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.util.Pair;
 import org.springframework.stereotype.Component;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.HashMap;
@@ -48,7 +50,7 @@ public final class CommandInvoker{
         return controllerMap.containsKey(command);
     }
 
-    public String executeCommand(String cmd, User user, String[] args) {
+    public String executeCommand(String cmd, User user, String[] args) throws TimeoutException{
         if(!isCommandAvailable(cmd)) return "Ошибка.";
         Pair<Object, Method> methodPair = controllerMap.get(cmd);
         Object controllerObject = methodPair.getFirst();
@@ -65,6 +67,8 @@ public final class CommandInvoker{
         Object[] methodArgs = buildMethodInvokeArgs(user, args, commandMethod);
         try{
             commandMethod.invoke(controllerObject, methodArgs);
+        }catch(InvocationTargetException e){
+            if(e.getCause() instanceof TimeoutException timeoutException) throw timeoutException;
         }catch(Exception e){
             e.printStackTrace();
         }
@@ -82,6 +86,5 @@ public final class CommandInvoker{
         }
         return methodArgs;
     }
-
 
 }

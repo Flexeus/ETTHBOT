@@ -1,9 +1,7 @@
 package com.uospd;
 
 import com.uospd.entityes.User;
-import com.uospd.services.CommutatorService;
-import com.uospd.services.LoggingService;
-import com.uospd.services.UserService;
+import com.uospd.services.*;
 import com.uospd.switches.Commutator;
 import com.uospd.switches.exceptions.ConnectException;
 import com.uospd.switches.exceptions.InvalidDatabaseOIDException;
@@ -56,6 +54,7 @@ public class Bot extends TelegramLongPollingBot {
     @Autowired private AntifloodService antifloodService;
 
     private final Map<Integer, ReplyKeyboard> keyboardStorage = new HashMap<>();
+    private boolean loaded = false;
 
     public Bot(String botName,String apiKey){
         BOT_NAME = botName;
@@ -66,167 +65,172 @@ public class Bot extends TelegramLongPollingBot {
     private void init(){
         sendToSuperAdmin("Бот загружен");
         logger.log("Бот был загружен");
+        loaded = true;
     }
 
     public void onUpdateReceived(Update update){
-        if(userService == null) try{ Thread.sleep(3000); }catch(InterruptedException e){ e.printStackTrace(); }
-        if(update.hasCallbackQuery()){
-            logger.debug(update.getCallbackQuery().getData());
-            String calldata = update.getCallbackQuery().getData();
-            long sender = update.getCallbackQuery().getFrom().getId();
-            User user;
-            try{
-                user = userService.getUser(sender);
-            }catch(UserNotFoundException e){return;}
-            logger.debug(user);
-            String[] args = calldata.split(";");
-            if(!callbackInvoker.isCallbackAvailable(args[0])) throw new IllegalStateException("Unexpected callback value: " + calldata);
-            try{
+        User user = null;
+        try{
+           // if(userService == null) try{Thread.sleep(3000);}catch(InterruptedException e){e.printStackTrace();}
+            if(!loaded) return;
+            if(update.hasCallbackQuery()){
+                logger.debug(update.getCallbackQuery().getData());
+                String calldata = update.getCallbackQuery().getData();
+                long sender = update.getCallbackQuery().getFrom().getId();
+
+                try{user = userService.getUser(sender);}catch(UserNotFoundException e){return;}
+                logger.debug(user);
+                String[] args = calldata.split(";");
+                if(!callbackInvoker.isCallbackAvailable(args[0])) throw new IllegalStateException("Unexpected callback value: " + calldata);
                 CallbackQuery callbackQuery = update.getCallbackQuery();
                 callbackInvoker.executeCallback(calldata, callbackQuery, user);
-            }catch(TimeoutException e){
+            }else if(update.hasMessage()){
+                long dateDiff = getDateDiff(new Date(TimeUnit.SECONDS.toMillis(update.getMessage().getDate())), new Date(), TimeUnit.MINUTES); // Узнаем сколько минут прошло с момента сообщения
+                if(dateDiff > 40){
+                    System.out.println("datediff>40");
+                    return; // если прошло больше 40 минут то пропускаем сообщение
+                }
+                Message message = update.getMessage();
+                long sender = message.getFrom().getId();
+                if(message.hasContact()){ // Если пользователь отправил свой номер телефона
+                    Map<Long, User> registrationRequests = userService.getRegistrationRequests();
+                    if(userService.userExists(sender) || !registrationRequests.containsKey(sender)) return;
+                    User newUser = registrationRequests.get(sender);
+                    if(sender != message.getContact().getUserId()){
+                        logger.log(newUser.getName() + " отправил чужой контакт");
+                        sendMsg(sender, "Вы должны отправить свой контакт!");
+                        return;
+                    }
+                    String phoneNumber = message.getContact().getPhoneNumber();
+                    newUser.setPhoneNumber(phoneNumber);
+                    sendToSuperAdmin(String.format("%s(%d)\nТелефон:%s\nХочет зарегистрироваться.", newUser.getName(), newUser.getId(), newUser.getPhoneNumber()));
+                    sendMsg(sender, "Заявка на регистрацию была отправлена администратору.");
+                    return;
+                }
+                if(!update.getMessage().hasText()) return;
+                String text = message.getText();
+                long chatid = message.getChatId();
+                if(sender != chatid) return;
+                try{
+                    user = userService.getUser(sender);
+                }catch(UserNotFoundException e){
+                    Map<Long, User> registationRequests = userService.getRegistrationRequests();
+                    String name = message.getFrom().getFirstName() + " " + message.getFrom().getLastName();
+                    logger.log(String.format("*Незарегистрированный* %s(%d): %s", name, sender, text));
+                    if(registationRequests.containsKey(sender)){
+                        sendMsg(sender, "Вы уже отправляли заявку на регистрацию");
+                        return;
+                    }
+                    if(name.contains("null")){
+                        sendMsg(sender, "Неверный формат имени(не указано имя или фамилия в профиле)");
+                        return;
+                    }
+                    sendGetContactButton(sender);
+                    registationRequests.put(sender, new User(sender, name));
+                    return;
+                }
+                if(user.isBanned()) return;
+                logger.writeUserLog(sender, text);
+                logger.debug(user);
+                String[] args = text.split(" ");
+                if(commandInvoker.isCommandAvailable(args[0])){
+                    String result = commandInvoker.executeCommand(args[0], user, args);
+                    sendMsg(sender, result);
+                    return;
+                }
+                if(commandInvoker.isCommandAvailable(text)){
+                    String result = commandInvoker.executeCommand(text, user, args);
+                    sendMsg(sender, result);
+                    return;
+                }
+                if(isInt(text)){
+                    if(!user.isConnectedToSwitch()){
+                        sendMsg(sender, "Для выбора порта подключитесь к коммутатору.");
+                        return;
+                    }
+                    antifloodService.timeoutCheck("commutator:" + user.getSwitch().getIp());
+                    portCMD(user, Integer.parseInt(text));
+                    antifloodService.action("commutator:" + user.getSwitch().getIp(), 8);
+                }else if(text.startsWith(">")){
+                    try{
+                        String ip = text.substring(text.indexOf(">") + 1);
+                        connect(user, InetAddress.getByName(ip).getHostAddress());
+                    }catch(UnknownHostException e){
+                        sendMsg(sender, "Не удалось подключиться к коммутатору. Возможно неверный ДНС");
+                    }
+                }else if(text.startsWith("10.42.") && !containsIllegals(text) && text.length() > 8){
+                    int doubledot = text.indexOf(":");
+                    if(doubledot != -1){
+                        int port = Integer.parseInt(text.substring(doubledot + 1));
+                        String ip = text.substring(0, doubledot);
+                        connect(user, ip);
+                        if(user.isConnectedToSwitch() && user.getSwitch().getIp().equals(ip)) portCMD(user, port);
+                    }else connect(user, text);
+                }else if(!text.startsWith("/")){
+                    if(text.startsWith("атс") || text.startsWith("умсд")){
+                        if(args.length != 2){
+                            sendMsg(user, "Не указан номер станции");
+                            return;
+                        }
+                        if(!isInt(args[1])){
+                            sendMsg(user, "Некорректный номер станции");
+                            return;
+                        }
+                        stationSearchCMD(args[0], Integer.parseInt(args[1]), user);
+                        return;
+                    }else if(text.endsWith("атс") || text.endsWith("умсд")){
+                        if(!isInt(args[0])){
+                            sendMsg(user, "Некорректный номер станции");
+                            return;
+                        }
+                        stationSearchCMD(args[1], Integer.parseInt(args[0]), user);
+                        return;
+                    }
+                    searchCMD(user, text);
+                }else sendMsg(user, "Неизвестная команда");
+            }
+        }catch(TimeoutException e){
+            if(user != null && !user.isAdmin()){
                 sendMsg(user, "Таймаут. Осталось секунд: " + e.getRemainingSeconds());
+                logger.writeUserLog(user, "получил предупреждение за флуд");
             }
-        }else if(update.hasMessage()){
-            long dateDiff = getDateDiff(new Date(TimeUnit.SECONDS.toMillis(update.getMessage().getDate())), new Date(), TimeUnit.MINUTES); // Узнаем сколько минут прошло с момента сообщения
-            if(dateDiff>40){
-                System.out.println("datediff>40");
-                return; // если прошло больше 40 минут то пропускаем сообщение
-            }
-            Message message = update.getMessage();
-            long sender = message.getFrom().getId();
-            if(message.hasContact()){ // Если пользователь отправил свой номер телефона
-                Map<Long, User> registrationRequests = userService.getRegistrationRequests();
-                if(userService.userExists(sender) || !registrationRequests.containsKey(sender)) return;
-                User newUser = registrationRequests.get(sender);
-                if(sender != message.getContact().getUserId()){
-                    logger.log(newUser.getName()+ " отправил чужой контакт");
-                    sendMsg(sender,"Вы должны отправить свой контакт!");
-                    return;
-                }
-                String phoneNumber = message.getContact().getPhoneNumber();
-                newUser.setPhoneNumber(phoneNumber);
-                sendToSuperAdmin(String.format("%s(%d)\nТелефон:%s\nХочет зарегистрироваться.",newUser.getName(),newUser.getId(),newUser.getPhoneNumber()));
-                sendMsg(sender,"Заявка на регистрацию была отправлена администратору.");
-                return;
-            }
-            if(!update.getMessage().hasText()) return;
-            String text = message.getText();
-            long chatid = message.getChatId();
-            if(sender != chatid) return;
-            User user;
-            try{
-                user = userService.getUser(sender);
-            }catch(UserNotFoundException e){
-                Map<Long, User> registationRequests = userService.getRegistrationRequests();
-                String name = message.getFrom().getFirstName() + " " + message.getFrom().getLastName();
-                logger.log(String.format("*Незарегистрированный* %s(%d): %s", name, sender, text));
-                if(registationRequests.containsKey(sender)){
-                    sendMsg(sender, "Вы уже отправляли заявку на регистрацию");
-                    return;
-                }
-                if(name.contains("null")){
-                    sendMsg(sender, "Неверный формат имени(не указано имя или фамилия в профиле)");
-                    return;
-                }
-                sendGetContactButton(sender);
-                registationRequests.put(sender, new User(sender,name));
-                return;
-            }
-            if(user.isBanned()) return;
-            logger.writeUserLog(sender, text);
-            logger.debug(user);
-
-            String[] args = text.split(" ");
-            if(commandInvoker.isCommandAvailable(args[0])){
-                String result = commandInvoker.executeCommand(args[0], user, args);
-                sendMsg(sender, result);
-                return;
-            }
-            if(commandInvoker.isCommandAvailable(text)){
-                String result = commandInvoker.executeCommand(text, user, args);
-                sendMsg(sender, result);
-                return;
-            }
-            if(isInt(text)){
-                if(!user.isConnectedToSwitch()){
-                    sendMsg(sender, "Для выбора порта подключитесь к коммутатору.");
-                    return;
-                }
-                try{
-                    antifloodService.action("commutator:"+user.getSwitch().getIp(),8);
-                }catch(TimeoutException e){
-                    sendMsg(user, "Таймаут. Осталось секунд: " + e.getRemainingSeconds());
-                    return;
-                }
-                portCMD(user, Integer.parseInt(text));
-            }else if(text.startsWith(">")){
-                try{
-                    String ip = text.substring(text.indexOf(">") + 1);
-                    connect(user, InetAddress.getByName(ip).getHostAddress());
-                }catch(UnknownHostException e){
-                    sendMsg(sender, "Не удалось подключиться к коммутатору: неверный ДНС");
-                }
-            }else if(text.startsWith("10.42.") && !containsIllegals(text) && text.length() > 8){
-                int doubledot = text.indexOf(":");
-                if(doubledot != -1){
-                    int port = Integer.parseInt(text.substring(doubledot + 1));
-                    String ip = text.substring(0, doubledot);
-                    connect(user, ip);
-                    if(user.isConnectedToSwitch() && user.getSwitch().getIp().equals(ip)) portCMD(user, port);
-                }else connect(user, text);
-            }else if(!text.startsWith("/")){
-                if(text.startsWith("атс") || text.startsWith("умсд")){
-                    if(args.length != 2){
-                        sendMsg(user,"Не указан номер станции");
-                        return;
-                    }
-                    if(!isInt(args[1])){
-                        sendMsg(user,"Некорректный номер станции");
-                        return;
-                    }
-                    stationSearchCMD(args[0], Integer.parseInt(args[1]), user);
-                    return;
-                }
-                else if(text.endsWith("атс") || text.endsWith("умсд")){
-                    if(!isInt(args[0])){
-                        sendMsg(user,"Некорректный номер станции");
-                        return;
-                    }
-                    stationSearchCMD(args[1], Integer.parseInt(args[0]), user);
-                    return;
-                }
-                streetCMD(user, text);
-            }
-            else sendMsg(user,"Неизвестная команда");
         }
     }
 
     private void stationSearchCMD(String stationType,int stationId,User user){
-        List<Commutator> allByStation = commutatorService.getAllByStation(stationType, stationId);
+        List<Commutator> allByStation = commutatorService.findStation(stationType, stationId);
         showSwitchList(user,allByStation);
     }
 
-    public void streetCMD(User user, String text){
-        String house, street;
-        if(!text.contains(" ")){
-            sendMsg(user, "Вы не указали номер дома\nНапример: Курако 39");
-            return;
-        }
-        int lastsp = text.lastIndexOf(" ") + 1;
-        street = text.substring(0, lastsp - 1);
-        if(street.length() < 3){
+    public void searchCMD(User user, String text){
+        if(text.length() < 4 && !text.equalsIgnoreCase("Доз")){
             sendMsg(user, "Слишком короткий адрес");
             return;
         }
-        house = text.substring(lastsp);
-        if(house.contains("/") && house.length() > 6 || !house.contains("/") && house.length() > 4){
-            sendMsg(user, "Неверный формат адреса.");
+        List<Commutator> allByStreet = commutatorService.getAllByStreet(text);
+        if(allByStreet.isEmpty()){
+            sendMsg(user, "Совпадений не найдено");
             return;
         }
-        if(house.equals("-")) return;
-        List<Commutator> commutators = commutatorService.getAllByAddress(street, house);
-        showSwitchList(user, commutators);
+        Map<String, List<Commutator>> houseMap = new TreeMap<>(new HouseNumberComparator());
+        for(Commutator x: allByStreet){
+            if(houseMap.containsKey(x.getHome()) && houseMap.size()>1) continue; // если больше 1 ключа, то нет смысла заполнять остальныее листы коммутаторами
+            List<Commutator> commutators = houseMap.getOrDefault(x.getHome(), new ArrayList<>(8));
+            commutators.add(x);
+            houseMap.put(x.getHome(), commutators);
+        }
+        if(houseMap.size() == 1){ // Если полный адрес всего 1 то показываем сразу коммутаторы
+            List<Commutator> commutators = houseMap.values().stream().findFirst().get();
+            showSwitchList(user, commutators);
+            return;
+        }
+        if(houseMap.size() > 99){
+            sendMsg(user, "Найдено слишком много совпадений. Уточните запрос");
+            return;
+        }
+        KeyboardBuilder kb = new KeyboardBuilder(8);
+        houseMap.forEach((k, v) -> kb.addButtonOnRow(k, "showswitches;" + text + ";" + k)); // shoswitches;Зорге;10
+        sendMsg(user, "Адресов найдено: " + houseMap.size(), kb.build());
     }
 
     public void portCMD(User user, int port){
@@ -324,7 +328,6 @@ public class Bot extends TelegramLongPollingBot {
         return true;
     }
 
-
     public void sendCommandList(User user){
         sendMsg(user, "Как пользоваться ботом?"+
                 "\nДля подключения к коммутатору введите его адрес или ip-адрес в чат."+
@@ -351,7 +354,6 @@ public class Bot extends TelegramLongPollingBot {
             }
         });
     }
-
 
     public void deleteMessage(int messageId,long chatId){
         DeleteMessage deleteMessage = new DeleteMessage();
@@ -393,17 +395,19 @@ public class Bot extends TelegramLongPollingBot {
         keyboardStorage.put(messageId,keyboard);
     }
 
-    public void sendToSuperAdmin(String text){
-        sendMsg(810937833L,text);
+    public Message sendToSuperAdmin(String text){
+        return sendMsg(810937833L,text);
     }
 
     public void SendToDebugChat(String text){
         sendToSuperAdmin(text);
     }
 
-    public void SendToUOSPD(String text){
-        if(Main.isTestMode()) sendToSuperAdmin(text);
-        else sendMsg(-1001256854052L, text);
+    public Message SendToUOSPD(String text){
+        if(Main.isTestMode()) return sendToSuperAdmin(text);
+        else{
+            return sendMsg(-1001256854052L, text);
+        }
     }
 
     public Message sendMsg(User recipient, String text) {
@@ -411,7 +415,7 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     public Message sendMsg(long recipient, String text) {
-        if(text == null || text.isEmpty()) return null;
+        if(text == null || text.isEmpty()) throw new IllegalArgumentException();
         if(text.length()>MAX_MESSAGE_LENGTH && text.length() < 10000){
             sendMsg(recipient,text.substring(0,MAX_MESSAGE_LENGTH));
             return sendMsg(recipient,text.substring(MAX_MESSAGE_LENGTH));
@@ -421,11 +425,7 @@ public class Bot extends TelegramLongPollingBot {
             return execute(sendMessage);
         }
         catch(TelegramApiException e){
-            try{
-                logger.log("Не удалось отправить сообщение пользователю:" + userService.getUser(recipient).getName());
-            }catch(UserNotFoundException userNotFoundException){
-                userNotFoundException.printStackTrace();
-            }
+            logger.log("Не удалось отправить сообщение пользователю:" + recipient);
             e.printStackTrace();
             return null;
         }
@@ -436,7 +436,7 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     public Message sendMsg(long recipient, String text, ReplyKeyboard keyboard) {
-        if(text == null || text.equals("")) return null;
+        if(text == null || text.equals("")) throw new IllegalArgumentException();
         try {
             SendMessage send = new SendMessage();
             send.setChatId(String.valueOf(recipient));
@@ -529,5 +529,4 @@ public class Bot extends TelegramLongPollingBot {
             e.printStackTrace();
         }
     }
-
 }

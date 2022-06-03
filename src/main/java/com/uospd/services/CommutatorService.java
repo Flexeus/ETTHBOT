@@ -29,7 +29,7 @@ public class CommutatorService {
         return stationRepository.findAll();
     }
 
-    public List<Commutator> getAllByStation(String type, int number){
+    public List<Commutator> findStation(String type, int number){
         Optional<Station> optional = stationRepository.findByTypeAndNumber(type.toUpperCase(), number);
         if(optional.isEmpty()) return Collections.emptyList();
         Station station = optional.get();
@@ -40,6 +40,10 @@ public class CommutatorService {
 
     public List<Commutator> getAllByAddress(String street, String home){
         return commutatorRepository.findAllByStreetContainingAndHomeEquals(street,home);
+    }
+
+    public List<Commutator> getAllByStreet(String street){
+        return commutatorRepository.findAllByAddress(street);
     }
 
     public Commutator getCommutator(String ip) throws UnsupportedCommutatorException{

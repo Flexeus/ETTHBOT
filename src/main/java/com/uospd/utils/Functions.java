@@ -77,7 +77,7 @@ public final class Functions {
         return countWeight;
     }
 
-    public static List<String> tableFormat(List<String> stringList){
+    public static List<String> tableFormat(List<String> stringList){ // Ужас
         List<String> list = new ArrayList<>();
         String max="";
         for(String word: stringList){

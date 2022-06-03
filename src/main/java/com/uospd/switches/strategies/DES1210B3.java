@@ -35,6 +35,8 @@ public class DES1210B3 implements DDMStrategy, DLinkCableTestStrategy, DropCount
 
     @Override
     public void dropCounters(Commutator commutator,int port) throws Exception{
+        System.out.println("DES b3");
+        //System.out.println("port:"+port);
         commutator.executeTelnetCommands("clear counters ports "+port);
     }
 }

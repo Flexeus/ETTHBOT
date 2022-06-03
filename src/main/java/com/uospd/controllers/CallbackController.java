@@ -5,17 +5,13 @@ import com.uospd.annotations.BotController;
 import com.uospd.annotations.Callback;
 import com.uospd.entityes.Group;
 import com.uospd.entityes.User;
-import com.uospd.services.AccidentService;
-import com.uospd.services.CommutatorService;
-import com.uospd.services.LoggingService;
-import com.uospd.services.UserService;
+import com.uospd.services.*;
 import com.uospd.switches.Commutator;
 import com.uospd.utils.*;
 import lombok.SneakyThrows;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +62,13 @@ public class CallbackController{
         bot.sendMsg(declinedUser,"Заявка на регистрацию была отклонена администратором");
     }
 
+    @Callback
+    public void showswitches(User user, String[] args){
+        String street = args[0];
+        String house = args[1];
+        bot.showSwitchList(user,commutatorService.getAllByAddress(street,house));
+    }
+
     @Callback @SneakyThrows
     public void ping(User user, String args[]){
         String ip = args[0];
@@ -89,11 +92,13 @@ public class CallbackController{
             bot.sendMsg(user, "Вы не подключены к этому коммутатору");
             return;
         }
-        antifloodService.action("commutator:"+ip,8);
+        antifloodService.timeoutCheck("commutator:"+ip);
         int port = Integer.parseInt(args[1]);
         bot.deleteMessage(query.getMessage().getMessageId(),user.getId());
         bot.portCMD(user,port);
+        antifloodService.action("commutator:"+ip,8);
         logger.writeUserLog(user, "обновил информацию о "+ip+":"+port);
+
 
     }
 
@@ -104,8 +109,8 @@ public class CallbackController{
             bot.sendMsg(user, "Вы не подключены к этому коммутатору");
             return;
         }
-        antifloodService.action("restartport:"+ip,20);
-        antifloodService.action("commutator:"+ip,8);
+        antifloodService.timeoutCheck("restartport:"+ip);
+        antifloodService.timeoutCheck("commutator:"+ip);
         int port = Integer.parseInt(args[1]);
         if (user.getSwitch().restartPort(port)){
             bot.sendMsg(user, "Порт был перезагружен");
@@ -115,6 +120,8 @@ public class CallbackController{
             bot.sendMsg(user, "Не удалось перезагрузить порт");
             logger.writeUserLog(user,"Не смог перезагрузить "+port+" порт");
         }
+        antifloodService.action("restartport:"+ip,20);
+        antifloodService.action("commutator:"+ip,8);
     }
 
     @Callback(timeout = 180)
@@ -124,8 +131,10 @@ public class CallbackController{
             bot.sendMsg(user, "Вы не подключены к этому коммутатору");
             return;
         }
-        antifloodService.action("clearcounters:"+ip,180);
-        antifloodService.action("commutator:"+ip,8);
+
+        antifloodService.timeoutCheck("clearcounters:"+ip);
+        antifloodService.timeoutCheck("commutator:"+ip);
+
         Commutator userSwitch = user.getSwitch();
         int port = Integer.parseInt(args[1]);
         final int olderrors = userSwitch.getErrorsCount(port);
@@ -134,9 +143,9 @@ public class CallbackController{
                 userSwitch.dropCounters(port);
             }catch(Exception e){
                 e.printStackTrace();
-                bot.sendMsg(user,"Не удалось сбросить ошибки");
+                bot.sendMsg(user,"Drop counters error");
             }
-            try{ Thread.sleep(2000); }catch(InterruptedException e){ e.printStackTrace(); }
+            try{ Thread.sleep(2000); }catch(InterruptedException e){ e.printStackTrace(); return; }
             int newerrors = userSwitch.getErrorsCount(port);
             if(newerrors < olderrors || newerrors == 0){
                 bot.sendMsg(user, "Счетчик ошибок был сброшен");
@@ -148,6 +157,8 @@ public class CallbackController{
                 bot.SendToDebugChat("У пользователя " + user.getName() + " на " + userSwitch.getIp() + ":" + port + " не сбросились ошибки. NewErrors:" + newerrors);
             }
         });
+        antifloodService.action("commutator:"+ip,8);
+        antifloodService.action("clearcounters:"+ip,180);
     }
 
     @Callback(timeout = 180)
@@ -157,8 +168,8 @@ public class CallbackController{
             bot.sendMsg(user, "Вы не подключены к этому коммутатору");
             return;
         }
-        antifloodService.action("showvlans:"+ip,180);
-        antifloodService.action("commutator:"+ip,8);
+        antifloodService.timeoutCheck("showvlans:"+ip);
+        antifloodService.timeoutCheck("commutator:"+ip);
         int port = Integer.parseInt(args[1]);
         String vlans;
         try {
@@ -170,6 +181,8 @@ public class CallbackController{
         }
         bot.sendMsg(user,vlans);
         logger.writeUserLog(user.getId(),"Посмотрел вланы на " + user.getSwitch().getIp() + ":" + port);
+        antifloodService.action("commutator:"+ip,8);
+        antifloodService.action("showvlans:"+ip,180);
     }
 
     @Callback(timeout = 30)
@@ -179,8 +192,8 @@ public class CallbackController{
             bot.sendMsg(user, "Вы не подключены к этому коммутатору");
             return;
         }
-        antifloodService.action("showmacs:"+ip,30);
-        antifloodService.action("commutator:"+ip,8);
+        antifloodService.timeoutCheck("showmacs:"+ip);
+        antifloodService.timeoutCheck("commutator:"+ip);
         int port = Integer.parseInt(args[1]);
         try {
             bot.sendMsg(user, user.getSwitch().getMacsOnPort(port));
@@ -189,6 +202,8 @@ public class CallbackController{
             bot.sendMsg(user, "Не удалось получить маки");
             logger.writeUserLog(user.getId(),"Не смог посмотреть маки на " + user.getSwitch().getIp() + ":" + port);
         }
+        antifloodService.action("showmacs:"+ip,30);
+        antifloodService.action("commutator:"+ip,8);
     }
 
     @Callback(timeout = 20)
@@ -199,18 +214,20 @@ public class CallbackController{
             return;
         }
         if(!user.getSwitch().supportingDDM()) return;
-        antifloodService.action("ddm:"+ip,20);
-        antifloodService.action("commutator:"+ip,8);
+        antifloodService.timeoutCheck("ddm:"+ip);
+        antifloodService.timeoutCheck("commutator:"+ip);
         int port = Integer.parseInt(args[1]);
         bot.sendMsg(user, "Пожалуйста, подождите");
         String info = user.getSwitch().getDDMInfo(port);
         bot.sendMsg(user, info);
         logger.writeUserLog(user.getId(), "Посмотрел данные с SFP на " + user.getSwitch().getIp() + ":" + port);
+        antifloodService.action("ddm:"+ip,20);
+        antifloodService.action("commutator:"+ip,8);
     }
 
     @Callback
     public void updateAvarii(User user,String args[],CallbackQuery callbackQuery) throws TimeoutException{
-        antifloodService.action("updateAvarii",7);
+        antifloodService.timeoutCheck("updateAvarii");
         int accidentMessageId = Integer.parseInt(args[0]);
         String accidentSwitches = accidentService.getDownSwitches();
         accidentSwitches = "Время обновления:"+ Functions.getDate()+"\n"+accidentSwitches;
@@ -218,6 +235,7 @@ public class CallbackController{
         int recoveredMessageId = callbackQuery.getMessage().getMessageId();
         bot.editMessageText(user.getId(), recoveredMessageId, accidentService.getUPSwitches());
         logger.writeUserLog(user, "обновил список аварий");
+        antifloodService.action("updateAvarii",7);
     }
 
     @Callback

@@ -282,11 +282,12 @@ public class Commutator{
 
     public void executeTelnetCommands(String...cmd) throws Exception{
         telnet = new Telnet(telnetLogin,telnetPassword,this);
-        System.out.println("перед отправкой команд");
+        telnet.connect();
         telnet.send(cmd);
+//        String s = telnet.returnCMDResult();
+//        System.out.println(s);
         telnet.close();
     }
-
 
 
     public String getResponse(String response) throws NoSnmpAnswerException{
